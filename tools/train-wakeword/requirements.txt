@@ -1,0 +1,12 @@
+# Trainingspipeline für das Weckwortmodell.
+# Getestet mit Python 3.10 bis 3.12.
+
+openwakeword>=0.6.0
+piper-tts>=1.2.0
+torch>=2.2.0
+onnx>=1.16.0
+numpy>=1.24.0
+scipy>=1.11.0
+soundfile>=0.12.1
+tqdm>=4.66.0
+datasets>=2.18.0

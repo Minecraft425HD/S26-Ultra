@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Der Dauerlauscher. Wird ausschließlich innerhalb eines Vordergrunddienstes
+         vom Typ "microphone" benutzt. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <uses-feature
+        android:name="android.hardware.microphone"
+        android:required="true" />
+
+</manifest>

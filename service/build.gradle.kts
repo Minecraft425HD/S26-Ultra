@@ -1,0 +1,40 @@
+plugins {
+    alias(libs.plugins.android.library)
+    alias(libs.plugins.kotlin.android)
+}
+
+android {
+    namespace = "de.neon.service"
+    compileSdk = 36
+
+    defaultConfig {
+        minSdk = 33
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+dependencies {
+    api(project(":core:router"))
+    api(project(":core:inference"))
+    implementation(project(":core:audio"))
+    implementation(project(":core:speech"))
+    implementation(project(":core:memory"))
+    // api, weil ToolRegistry im Konstruktor des Orchestrators vorkommt.
+    api(project(":core:tools"))
+    implementation(project(":core:platform"))
+
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.service)
+    implementation(libs.kotlinx.coroutines.android)
+
+    testImplementation(libs.kotlin.test)
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+}

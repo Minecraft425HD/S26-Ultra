@@ -1,0 +1,82 @@
+name: APK bauen
+
+# Baut bei jedem Push eine installierbare APK und hängt sie an die Ausführung an.
+# Damit lässt sich Neon ohne Entwicklungsumgebung auf dem Telefon installieren: Ergebnis
+# herunterladen, entpacken, antippen.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: JDK einrichten
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Gradle einrichten
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Android SDK 36 sicherstellen
+        # Das Projekt baut gegen API 36. Ob das Runner-Abbild die gerade vorhält, ändert
+        # sich mit jeder Aktualisierung — und AGP lädt fehlende Plattformen nicht von
+        # selbst nach, sondern bricht ab. Der Aufruf ist schnell und kostet nichts, wenn
+        # ohnehin alles da ist.
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager nicht gefunden unter $SDKMANAGER"
+            exit 1
+          fi
+          yes 2>/dev/null | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Tests
+        # Der Integrationstest gegen einen echten llama-server überspringt sich hier
+        # selbst — Server und Testmodell werden in CI nicht gebaut. Alles andere läuft.
+        run: ./gradlew test testDebugUnitTest --stacktrace
+
+      - name: Prüfen, dass llama-server mitgeliefert wird
+        # Ohne diese Datei baut die APK zwar, kann aber keine Fragen beantworten. Ein
+        # stiller Verlust wäre schwer zu bemerken — deshalb hier ausdrücklich prüfen.
+        run: |
+          BIN=app/src/main/jniLibs/arm64-v8a/libllama-server.so
+          if [ ! -f "$BIN" ]; then
+            echo "::error::$BIN fehlt. Mit scripts/build-llama-server.sh neu erzeugen."
+            exit 1
+          fi
+          echo "gefunden: $(du -h "$BIN" | cut -f1)"
+          file "$BIN" | grep -q "ARM aarch64" || {
+            echo "::error::$BIN ist kein arm64-Programm."
+            exit 1
+          }
+
+      - name: APK bauen
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: APK hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: neon-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Testberichte hochladen
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testberichte
+          path: "**/build/reports/tests/**"
+          if-no-files-found: ignore
