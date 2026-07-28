@@ -12,11 +12,14 @@ name: APK bauen
 # kein Ablaufdatum. Ein Actions-Artefakt kann das alles nicht.
 
 on:
-  # Nur main. Zusammen mit pull_request unten würde sonst jeder Push auf einen
-  # PR-Branch zweimal bauen.
+  # Nur ein Auslöser, und der greift auf jedem Branch.
+  #
+  # Vorher liefen push UND pull_request gleichzeitig, sodass jeder Push auf einen
+  # PR-Branch zweimal baute. Der Auslöser push auf main einzuschränken war der falsche
+  # Ausweg: Ohne offenen PR baute ein Branch dann gar nichts mehr. Richtig ist,
+  # pull_request wegzulassen — ein PR zeigt die Prüfung trotzdem an, weil sie auf
+  # demselben Commit läuft.
   push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
