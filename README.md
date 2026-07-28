@@ -135,8 +135,9 @@ es vorher gebaut hätte. `fetch-models.sh` erklärt den Weg über openWakeWord. 
 zusätzlich „Hey Neon" trainieren. Zwei Silben allein lösen erfahrungsgemäß häufiger falsch
 aus, und „Neonlicht" oder „Neonfarbe" gehören unbedingt als Gegenbeispiele ins Training.
 
-Fehlen die Modelle, startet Neon trotzdem: Die Regelstufe, die Spracherkennung und die
-Sprachausgabe funktionieren, ausgelöst wird dann über die App oder die Kachel.
+Fehlt das Weckwortmodell, bleibt Neon voll bedienbar: Der Knopf **„Sprechen"** startet die
+Aufnahme direkt und nimmt den Dienst mit hoch, falls er noch nicht läuft. Was dann fehlt,
+ist ausschließlich das freihändige Ansprechen.
 
 ### Lokale Inferenz
 
@@ -158,14 +159,29 @@ offen, ist für eine sideloadbare App also keine Option.
 
 ## Stand
 
-Fertig und getestet: Router mit allen vier Stufen inklusive Ähnlichkeitssuche und
-Router-Modell, Lernschleife, Hörschleife, Modell-Lebenszyklus, Werkzeug-Framework mit
-Kalender- und Nachrichten-Werkzeug, Gedächtnis-Kontext, Gesprächsablauf, Vordergrunddienst,
-Oberfläche mit Diagnose-Screen. **257 Unit-Tests.**
+### Was nach dem Installieren sofort funktioniert
 
-Noch offen: Weckwortmodell trainieren, Erinnerungen dauerhaft in Room ablegen (bisher hält
-nur die Sitzung sie), Trennung von Inferenz und Hörschleife in eigene Prozesse, NPU-Pfad,
-Messung auf dem Gerät.
+Ohne Download, ohne Training, ohne NDK:
+
+- **„Sprechen" drücken und reden.** Aufnahme, Sprachendpunkt-Erkennung, Spracherkennung
+  über Androids lokalen Erkenner, Sprachausgabe.
+- **Die Regelstufe.** „Timer fünf Minuten", „Wecker auf halb sieben", „Taschenlampe an",
+  „öffne Spotify", „wie spät ist es" — beantwortet und ausgeführt, ganz ohne Sprachmodell.
+- **Der Router.** Ordnet ein, wählt ein Modell und begründet die Wahl im Diagnose-Screen.
+- **Der Diagnose-Screen.** Durchlassquoten der Audiostufen, Anteil der Anfragen ohne
+  Sprachmodell, Latenzen je Modell.
+
+### Was noch nicht funktioniert
+
+- **Freihändiges Ansprechen.** Braucht ein trainiertes Weckwortmodell für „Neon" — das kann
+  niemand vorher gebaut haben. Bis dahin: Knopf statt Zuruf.
+- **Antworten auf echte Fragen.** Braucht die llama.cpp-Bibliothek *und* die GGUF-Dateien.
+  Fehlt eines von beidem, sagt Neon das ausdrücklich, statt stumm zu bleiben.
+- **Dauerhafte Erinnerungen.** Die Room-Tabellen stehen, angeschlossen ist bisher nur der
+  Sitzungsspeicher.
+- **Prozesstrennung, NPU-Pfad, Messung auf dem Gerät.**
+
+**257 Unit-Tests**, `:app:assembleDebug` baut.
 
 Die JNI-Brücke unter `core/inference/src/main/cpp/` ist die einzige Datei im Projekt, die
 noch nie kompiliert wurde — sie braucht NDK und llama.cpp-Quellen, die beide nicht im

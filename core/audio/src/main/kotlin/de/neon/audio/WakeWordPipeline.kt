@@ -70,7 +70,26 @@ class WakeWordPipeline(
     private val captured = ArrayList<Short>()
     private var framesSinceWake = 0
 
+    /**
+     * Von außen ausgelöste Aufnahme, ohne Weckwort.
+     *
+     * `@Volatile`, weil der Auslöser vom Oberflächen-Thread kommt und der Audio-Thread ihn
+     * liest.
+     */
+    @Volatile
+    private var manualTrigger = false
+
     var stats = CascadeStats(); private set
+
+    /**
+     * Startet die Aufnahme sofort, als wäre das Weckwort gefallen.
+     *
+     * Damit ist Neon auch ohne trainiertes Weckwortmodell benutzbar — und bleibt es in
+     * lauten Umgebungen, in denen ein Weckwort ohnehin unzuverlässig ist.
+     */
+    fun triggerManually() {
+        manualTrigger = true
+    }
 
     /**
      * Verarbeitet genau einen Audioblock.
@@ -92,6 +111,13 @@ class WakeWordPipeline(
         // verwirft. Sonst fehlte nach dem Weckwort der Anfang der Frage.
         preRoll.write(frame, length)
 
+        // Der Handauslöser steht vor allen Filtern: Wer den Knopf drückt, will
+        // aufnehmen — unabhängig davon, was Gatter, VAD und Weckwortmodell meinen.
+        if (manualTrigger) {
+            manualTrigger = false
+            return beginCapture(probability = 1f)
+        }
+
         if (!gate.accepts(frame, length)) return null
         stats = stats.copy(framesPastGate = stats.framesPastGate + 1)
 
@@ -102,8 +128,17 @@ class WakeWordPipeline(
         val probability = wakeWord.process(samples)
         if (probability < wakeWordThreshold) return null
 
-        // Ab hier wird aufgenommen. Der Vorlauf kommt mit in die Aufnahme, damit auch
-        // "Neon, wie spät ist es" in einem Zug funktioniert.
+        return beginCapture(probability)
+    }
+
+    /**
+     * Wechselt in die Aufnahme.
+     *
+     * Der Vorlauf kommt mit hinein, damit auch "Neon, wie spät ist es" in einem Zug
+     * funktioniert — beim Handauslöser fängt er zusätzlich ab, wer schon losredet, während
+     * er noch tippt.
+     */
+    private fun beginCapture(probability: Float): ListeningEvent {
         stats = stats.copy(wakeWordHits = stats.wakeWordHits + 1)
         state = State.AUFNAHME
         framesSinceWake = 0
@@ -145,6 +180,7 @@ class WakeWordPipeline(
         state = State.LAUSCHEN
         captured.clear()
         framesSinceWake = 0
+        manualTrigger = false
         preRoll.clear()
         segmenter.reset()
         vad.reset()

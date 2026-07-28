@@ -192,6 +192,8 @@ class NeonContainer(context: Context) {
 
             override fun listen(): Flow<ListeningEvent> = ownPipeline.listen(source)
 
+            override fun triggerManually() = ownPipeline.triggerManually()
+
             override fun release() {
                 orchestrator.shutdown()
                 source.close()

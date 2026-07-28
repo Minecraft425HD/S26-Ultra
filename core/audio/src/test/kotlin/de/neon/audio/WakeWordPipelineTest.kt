@@ -201,6 +201,66 @@ class WakeWordPipelineTest {
     }
 
     @Test
+    fun `der Handausloeser startet die Aufnahme ohne Weckwortmodell`() {
+        // Genau der Zustand nach dem Klonen des Projekts: kein trainiertes Weckwort.
+        // Ohne diesen Weg wäre Neon vollständig stumm.
+        val vad = ScriptedVad(probability = 0.9f)
+        val wakeWord = ScriptedWakeWord(probability = 0f)
+        val pipeline = pipeline(vad, wakeWord)
+
+        assertNull(pipeline.process(loudFrame()))
+
+        pipeline.triggerManually()
+        assertIs<ListeningEvent.WakeWordDetected>(pipeline.process(loudFrame()))
+    }
+
+    @Test
+    fun `der Handausloeser wirkt auch in vollkommener Stille`() {
+        // Das Energie-Gatter würde diese Blöcke verwerfen. Wer den Knopf drückt, will aber
+        // aufnehmen — die Filter dürfen ihn nicht überstimmen.
+        val vad = ScriptedVad(probability = 0f)
+        val wakeWord = ScriptedWakeWord(probability = 0f)
+        val pipeline = pipeline(vad, wakeWord)
+
+        pipeline.triggerManually()
+        assertIs<ListeningEvent.WakeWordDetected>(pipeline.process(silentFrame()))
+    }
+
+    @Test
+    fun `der Handausloeser wirkt genau einmal`() {
+        val vad = ScriptedVad(probability = 0.9f)
+        val pipeline = pipeline(vad, ScriptedWakeWord(probability = 0f))
+
+        pipeline.triggerManually()
+        assertIs<ListeningEvent.WakeWordDetected>(pipeline.process(loudFrame()))
+
+        // Aufnahme beenden.
+        vad.probability = 0f
+        repeat(8) { pipeline.process(silentFrame()) }
+
+        // Danach ist wieder Ruhe, bis erneut ausgelöst wird.
+        vad.probability = 0.9f
+        assertNull(pipeline.process(loudFrame()))
+    }
+
+    @Test
+    fun `nimmt nach dem Handausloeser eine vollstaendige Aeusserung auf`() {
+        val vad = ScriptedVad(probability = 0.9f)
+        val pipeline = pipeline(vad, ScriptedWakeWord(probability = 0f))
+
+        pipeline.triggerManually()
+        pipeline.process(loudFrame())
+        repeat(5) { pipeline.process(loudFrame()) }
+
+        vad.probability = 0f
+        var captured: ListeningEvent? = null
+        repeat(8) { captured = pipeline.process(silentFrame()) ?: captured }
+
+        val result = assertIs<ListeningEvent.SpeechCaptured>(captured)
+        assertTrue(result.samples.isNotEmpty())
+    }
+
+    @Test
     fun `zaehlt die Durchlassquoten der Stufen`() {
         val vad = ScriptedVad(probability = 0f)
         val pipeline = pipeline(vad, ScriptedWakeWord())

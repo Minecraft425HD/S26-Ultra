@@ -46,12 +46,15 @@ class MainActivity : ComponentActivity() {
 
     private val container by lazy { (application as NeonApplication).container }
 
+    /** Was nach der Berechtigungsabfrage passieren soll. */
+    private var pendingAction: (() -> Unit)? = null
+
     private val requestPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { granted ->
-        if (granted[Manifest.permission.RECORD_AUDIO] == true) {
-            NeonForegroundService.start(this)
-        }
+        val action = pendingAction
+        pendingAction = null
+        if (granted[Manifest.permission.RECORD_AUDIO] == true) action?.invoke()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -77,7 +80,8 @@ class MainActivity : ComponentActivity() {
                                 learnedExamples = container.learnedExampleCount,
                             )
                         },
-                        onStart = ::ensurePermissionsAndStart,
+                        onSpeak = { withPermissions { NeonForegroundService.trigger(this) } },
+                        onStart = { withPermissions { NeonForegroundService.start(this) } },
                         onStop = { NeonForegroundService.stop(this) },
                     )
                 }
@@ -91,7 +95,7 @@ class MainActivity : ComponentActivity() {
      * Unter Android 16 ist das keine Höflichkeit, sondern Voraussetzung: Ein Dienst, der
      * das Mikrofon benutzt, darf nur gestartet werden, während die App im Vordergrund ist.
      */
-    private fun ensurePermissionsAndStart() {
+    private fun withPermissions(action: () -> Unit) {
         val needed = buildList {
             if (!hasPermission(Manifest.permission.RECORD_AUDIO)) add(Manifest.permission.RECORD_AUDIO)
             if (!hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
@@ -99,8 +103,12 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        if (needed.isEmpty()) NeonForegroundService.start(this)
-        else requestPermissions.launch(needed.toTypedArray())
+        if (needed.isEmpty()) {
+            action()
+        } else {
+            pendingAction = action
+            requestPermissions.launch(needed.toTypedArray())
+        }
     }
 
     private fun hasPermission(permission: String): Boolean =
@@ -123,6 +131,7 @@ private fun NeonScreen(
     isModelAvailable: (ModelSpec) -> Boolean,
     wakeWordAvailable: Boolean,
     readDiagnostics: () -> Diagnostics,
+    onSpeak: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -158,19 +167,30 @@ private fun NeonScreen(
                         Spacer(Modifier.height(6.dp))
                         Text(
                             "Die Modelldateien für „Neon“ fehlen unter assets/wakeword/. " +
-                                "Führe scripts/fetch-models.sh aus. Bis dahin lässt sich " +
-                                "Neon nur hier über die Schaltfläche starten.",
+                                "Führe scripts/fetch-models.sh aus und trainiere das " +
+                                "Weckwortmodell. Bis dahin funktioniert „Sprechen“ — nur das " +
+                                "freihändige Ansprechen fehlt.",
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
                 }
             }
 
+            // "Sprechen" startet den Dienst mit, falls er noch nicht läuft. Für den
+            // häufigsten Fall — schnell etwas fragen — soll ein Knopfdruck genügen.
+            Button(
+                onClick = onSpeak,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = state != NeonState.SPRECHEN,
+            ) {
+                Text(if (state == NeonState.GESTOPPT) "Sprechen" else "Neon, …")
+            }
+
             Row(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Button(onClick = onStart) { Text("Zuhören") }
+                OutlinedButton(onClick = onStart) { Text("Dauerbetrieb") }
                 OutlinedButton(onClick = onStop) { Text("Beenden") }
             }
 

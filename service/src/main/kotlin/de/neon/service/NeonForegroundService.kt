@@ -39,6 +39,10 @@ class NeonForegroundService : LifecycleService() {
     interface Dependencies {
         val orchestrator: ConversationOrchestrator
         fun listen(): kotlinx.coroutines.flow.Flow<ListeningEvent>
+
+        /** Aufnahme ohne Weckwort starten, ausgelöst per Knopf oder Kachel. */
+        fun triggerManually()
+
         fun release()
     }
 
@@ -73,6 +77,20 @@ class NeonForegroundService : LifecycleService() {
             ACTION_INTERRUPT -> {
                 dependencies?.orchestrator?.interrupt()
                 return START_STICKY
+            }
+
+            ACTION_TRIGGER -> {
+                if (!hasMicrophonePermission()) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                // Ein Knopfdruck soll genügen: Läuft der Dienst noch nicht, wird er
+                // gestartet und die Aufnahme beginnt sofort. Zwei getrennte Bedienschritte
+                // dafür zu verlangen wäre für den häufigsten Fall — schnell etwas fragen —
+                // einer zu viel.
+                if (!_running.value) startListening()
+                dependencies?.triggerManually()
+                return START_NOT_STICKY
             }
         }
 
@@ -183,6 +201,7 @@ class NeonForegroundService : LifecycleService() {
 
         const val ACTION_STOP = "de.neon.action.STOP"
         const val ACTION_INTERRUPT = "de.neon.action.INTERRUPT"
+        const val ACTION_TRIGGER = "de.neon.action.TRIGGER"
 
         /**
          * Wird von der Anwendung beim Start gesetzt.
@@ -202,6 +221,19 @@ class NeonForegroundService : LifecycleService() {
         fun stop(context: Context) {
             context.startService(
                 Intent(context, NeonForegroundService::class.java).setAction(ACTION_STOP)
+            )
+        }
+
+        /**
+         * Startet die Aufnahme sofort, ohne Weckwort.
+         *
+         * Darf nur aus einer sichtbaren Oberfläche heraus aufgerufen werden — der Dienst
+         * benutzt das Mikrofon, und Android 16 erlaubt dessen Start nur dann.
+         */
+        fun trigger(context: Context) {
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, NeonForegroundService::class.java).setAction(ACTION_TRIGGER),
             )
         }
     }
