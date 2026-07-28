@@ -30,8 +30,40 @@ android {
         buildConfig = true
     }
 
+    /**
+     * Ein fester Signierschlüssel — der Punkt, an dem Updates hängen.
+     *
+     * Ohne ihn nimmt AGP den Debug-Schlüssel, und den erzeugt ein frischer Rechner (etwa
+     * ein CI-Läufer) bei jedem Lauf neu. Jede APK hätte dann eine andere Signatur, und
+     * Android verweigert die Installation über eine bestehende App mit „App nicht
+     * installiert". Man müsste jedes Mal deinstallieren — und dabei das importierte
+     * Sprachmodell, die gelernten Beispiele und das Gedächtnis verlieren.
+     *
+     * Der Schlüssel liegt bewusst offen im Repository und ist **keine Sicherheitsgrenze**:
+     * Neon landet in keinem Store, und wer das Repository lesen kann, könnte ohnehin eigene
+     * Builds erzeugen. Er sorgt allein dafür, dass sich Fassungen gegenseitig ablösen können.
+     * Sollte Neon je verteilt werden, gehört er in ein Secret außerhalb des Repositories.
+     */
+    signingConfigs {
+        create("neon") {
+            storeFile = rootProject.file("keystore/neon.jks")
+            storePassword = "neonneon"
+            keyAlias = "neon"
+            keyPassword = "neonneon"
+        }
+    }
+
     buildTypes {
+        // Beide Varianten mit demselben Schlüssel: So lässt sich ein lokal gebauter
+        // Debug-Build gegen eine Fassung aus der CI austauschen, ohne zu deinstallieren.
+        debug {
+            signingConfig = signingConfigs.getByName("neon")
+        }
         release {
+            signingConfig = signingConfigs.getByName("neon")
+            // R8 bleibt aus. Room und kotlinx.serialization greifen über Reflection zu;
+            // das ohne eigene Prüfung einzuschalten wäre genau die Art stiller
+            // Kaputtmachung, die erst auf dem Gerät auffällt.
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }

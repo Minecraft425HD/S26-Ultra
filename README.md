@@ -146,9 +146,17 @@ Es wird **kein** PC mit Entwicklungsumgebung gebraucht — weder adb noch Gradle
 
 ### 1. APK holen
 
-Der GitHub-Ablauf baut bei jedem Push eine installierbare APK. Unter *Actions* die letzte
-Ausführung öffnen, `neon-apk` herunterladen, entpacken, auf dem Telefon antippen.
-Mikrofon und Benachrichtigungen erlauben.
+Auf dem Telefon diesen Link öffnen und antippen:
+
+**https://github.com/Minecraft425HD/S26-Ultra/releases/latest/download/neon.apk**
+
+Er zeigt immer auf die neueste gebaute Fassung. Kein GitHub-Login, kein ZIP, kein
+Ablaufdatum. Android fragt einmal nach der Erlaubnis, Apps aus dieser Quelle zu
+installieren. Danach Mikrofon und Benachrichtigungen erlauben.
+
+Alle Fassungen tragen denselben Signierschlüssel, deshalb lässt sich eine neuere **über**
+eine bestehende Installation legen — das importierte Sprachmodell, die gelernten Beispiele
+und das Gedächtnis bleiben erhalten.
 
 Ab hier funktionieren bereits: der Knopf **„Sprechen"**, die Regelstufe (Timer, Wecker,
 Taschenlampe, App-Start), Spracherkennung und Sprachausgabe.
