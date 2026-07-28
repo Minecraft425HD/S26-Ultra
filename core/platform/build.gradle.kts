@@ -18,6 +18,12 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    testOptions {
+        // Der Absturzbericht liest android.os.Build aus. Im Unit-Test genügen die
+        // Standardwerte — geprüft wird die Ablage, nicht der Gerätename.
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {

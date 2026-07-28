@@ -117,6 +117,27 @@ Neu bauen — nur nötig, um llama.cpp zu aktualisieren:
 ANDROID_NDK=/pfad/zum/ndk ./scripts/build-llama-server.sh
 ```
 
+## Wenn etwas schiefgeht
+
+Auf einem Telefon ohne Entwicklungsumgebung ist ein Fehler sonst eine Sackgasse: Android
+zeigt „App wurde beendet" und sonst nichts, der Logcat ist ohne `adb` nicht erreichbar.
+Deshalb zwei Wege:
+
+- **Absturz beim Start.** Beim nächsten Öffnen zeigt Neon statt der Oberfläche den
+  Fehlerbericht mit vollständiger Aufrufliste und einem **Teilen**-Knopf. Der Handler dafür
+  wird als allererste Anweisung installiert, noch vor allem anderen.
+- **Fehler im Betrieb.** *Diagnose → Protokoll* zeigt die letzten Zeilen, ebenfalls mit
+  **Teilen**. Die Ausgabe von `llama-server` steht vollständig darin.
+
+Der Aufbau der Anwendung ist gekapselt: Scheitert ein Bestandteil, startet Neon trotzdem und
+zeigt den Grund, statt zu sterben. Sprachausgabe, Spracherkennung und Datenbank entstehen
+erst bei der ersten Benutzung — ein Assistent, der nicht startet, weil die Sprachausgabe
+hakt, wäre schlecht gebaut.
+
+Abgesichert ist das durch `app/src/test/kotlin/de/neon/app/StartupTest.kt`: Er erzeugt den
+Objektgraphen, die Anwendung und die Hauptansicht unter Robolectric — mit dem einfachsten und
+zugleich wichtigsten Anspruch überhaupt, nämlich dass die App starten kann.
+
 ## Aufbau
 
 ```

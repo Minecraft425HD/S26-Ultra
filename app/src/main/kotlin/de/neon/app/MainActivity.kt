@@ -57,7 +57,10 @@ import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
-    private val container by lazy { (application as NeonApplication).container }
+    private val app by lazy { application as NeonApplication }
+
+    /** Kann fehlen, wenn der Aufbau gescheitert ist. Dann wird der Fehler angezeigt. */
+    private val container: NeonContainer? get() = app.container
 
     /** Was nach der Berechtigungsabfrage passieren soll. */
     private var pendingAction: (() -> Unit)? = null
@@ -86,6 +89,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun importModel(modelId: String, uri: Uri) {
+        val store = container?.modelStore ?: return
         lifecycleScope.launch {
             importState.value = ImportState.Running(modelId, 0)
             val result = withContext(Dispatchers.IO) {
@@ -99,7 +103,7 @@ class MainActivity : ComponentActivity() {
                         "Die Datei ließ sich nicht öffnen."
                     )
 
-                container.modelStore.importFrom(
+                store.importFrom(
                     modelId = modelId,
                     source = stream,
                     expectedBytes = expected,
@@ -130,42 +134,76 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Zuerst nachsehen, ob der letzte Start abgestürzt ist. Dieser Zweig darf nichts
+        // vom Container brauchen — sonst stürbe er am selben Fehler, den er anzeigen soll.
+        val crash = runCatching { app.crashReporter.lastCrash() }.getOrNull()
+        val failure = app.startupFailure
+
         setContent {
             MaterialTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    NeonScreen(
-                        state = container.orchestrator.state.collectAsState().value,
-                        lastTurn = container.orchestrator.lastTurn.collectAsState().value,
-                        models = container.registry.generativeModels(),
-                        isModelAvailable = { container.modelStore.isAvailable(it) },
-                        wakeWordAvailable = container.wakeWordAvailable,
-                        inferenceAvailable = container.inferenceAvailable,
-                        importState = importState.collectAsState().value,
-                        wakeWordThreshold = container.wakeWordThreshold,
-                        onWakeWordThreshold = { container.wakeWordThreshold = it },
-                        onImportModel = { modelId ->
-                            pendingImportModelId = modelId
-                            importState.value = ImportState.Running(modelId, 0)
-                            // GGUF hat keinen eigenen MIME-Typ; deshalb alles anbieten und
-                            // die Datei danach an ihren Kennbytes prüfen.
-                            pickModelFile.launch(arrayOf("*/*"))
-                        },
-                        readDiagnostics = {
-                            Diagnostics(
-                                cascade = container.cascadeStats,
-                                router = container.routerStats(),
-                                knownExamples = container.knownExampleCount,
-                                learnedExamples = container.learnedExampleCount,
-                            )
-                        },
-                        onShareLog = ::shareLog,
-                        onSpeak = { withPermissions { NeonForegroundService.trigger(this) } },
-                        onStart = { withPermissions { NeonForegroundService.start(this) } },
-                        onStop = { NeonForegroundService.stop(this) },
-                    )
+                    val ready = container
+                    when {
+                        crash != null -> ProblemScreen(
+                            title = "Neon ist beim letzten Mal abgestürzt",
+                            explanation = "Schick mir diesen Bericht — daraus lässt sich " +
+                                "die Ursache ablesen.",
+                            detail = crash,
+                            onShare = { shareText("Neon-Absturzbericht", crash) },
+                            onDismiss = {
+                                app.crashReporter.clear()
+                                recreate()
+                            },
+                        )
+
+                        ready == null -> ProblemScreen(
+                            title = "Neon konnte nicht vollständig starten",
+                            explanation = "Die Oberfläche läuft, aber der Aufbau ist " +
+                                "gescheitert. Schick mir diesen Bericht.",
+                            detail = failure?.stackTraceToString() ?: "Ursache unbekannt.",
+                            onShare = {
+                                shareText(
+                                    "Neon-Fehlerbericht",
+                                    failure?.stackTraceToString() ?: "Ursache unbekannt.",
+                                )
+                            },
+                            onDismiss = null,
+                        )
+
+                        else -> NeonScreen(
+                            state = ready.orchestrator.state.collectAsState().value,
+                            lastTurn = ready.orchestrator.lastTurn.collectAsState().value,
+                            models = ready.registry.generativeModels(),
+                            isModelAvailable = { ready.modelStore.isAvailable(it) },
+                            wakeWordAvailable = ready.wakeWordAvailable,
+                            inferenceAvailable = ready.inferenceAvailable,
+                            importState = importState.collectAsState().value,
+                            wakeWordThreshold = ready.wakeWordThreshold,
+                            onWakeWordThreshold = { ready.wakeWordThreshold = it },
+                            onImportModel = { modelId ->
+                                pendingImportModelId = modelId
+                                importState.value = ImportState.Running(modelId, 0)
+                                // GGUF hat keinen eigenen MIME-Typ; deshalb alles anbieten
+                                // und die Datei danach an ihren Kennbytes prüfen.
+                                pickModelFile.launch(arrayOf("*/*"))
+                            },
+                            readDiagnostics = {
+                                Diagnostics(
+                                    cascade = ready.cascadeStats,
+                                    router = ready.routerStats(),
+                                    knownExamples = ready.knownExampleCount,
+                                    learnedExamples = ready.learnedExampleCount,
+                                )
+                            },
+                            onShareLog = ::shareLog,
+                            onSpeak = { withPermissions { NeonForegroundService.trigger(this) } },
+                            onStart = { withPermissions { NeonForegroundService.start(this) } },
+                            onStop = { NeonForegroundService.stop(this) },
+                        )
+                    }
                 }
             }
         }
@@ -199,18 +237,61 @@ class MainActivity : ComponentActivity() {
      * Ohne `adb` gibt es sonst keinen Weg an die Fehlermeldungen — und die entscheidende
      * steht meistens in der Ausgabe von llama-server, nicht in dem, was Neon vorliest.
      */
-    private fun shareLog() {
-        val text = NeonLog.fullText().ifBlank { "Das Protokoll ist leer." }
+    private fun shareLog() = shareText("Neon-Protokoll", NeonLog.fullText().ifBlank { "leer" })
+
+    private fun shareText(subject: String, text: String) {
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, "Neon-Protokoll")
+            putExtra(Intent.EXTRA_SUBJECT, subject)
             putExtra(Intent.EXTRA_TEXT, text)
         }
-        startActivity(Intent.createChooser(intent, "Protokoll teilen"))
+        startActivity(Intent.createChooser(intent, subject))
     }
 
     private fun hasPermission(permission: String): Boolean =
         ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+}
+
+/**
+ * Zeigt einen Absturz oder einen gescheiterten Start an.
+ *
+ * Bewusst ohne jede Abhängigkeit zum Objektgraphen: Dieser Bildschirm muss gerade dann
+ * funktionieren, wenn der Rest der App es nicht tut.
+ */
+@Composable
+private fun ProblemScreen(
+    title: String,
+    explanation: String,
+    detail: String,
+    onShare: () -> Unit,
+    onDismiss: (() -> Unit)?,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(title, style = MaterialTheme.typography.headlineSmall)
+        Text(explanation, style = MaterialTheme.typography.bodyMedium)
+
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(onClick = onShare) { Text("Bericht teilen") }
+            if (onDismiss != null) {
+                OutlinedButton(onClick = onDismiss) { Text("Verwerfen und weiter") }
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                Modifier
+                    .padding(12.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(detail, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
 }
 
 /** Wo der Modell-Import gerade steht. */

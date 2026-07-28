@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Auch eine Verbindung zu 127.0.0.1 braucht diese Berechtigung. Neon spricht den
+         mitgelieferten llama-server über HTTP an; ohne sie wirft OkHttp eine
+         SecurityException, sobald die erste Antwort erzeugt werden soll. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+</manifest>

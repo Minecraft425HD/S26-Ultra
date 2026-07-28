@@ -20,6 +20,7 @@ import de.neon.memory.MemoryRepository
 import de.neon.memory.NeonDatabase
 import de.neon.memory.RoutingExampleRepository
 import de.neon.platform.DeviceStateProvider
+import de.neon.platform.NeonLog
 import de.neon.router.HashingEmbeddingProvider
 import de.neon.router.InMemoryRouteOutcomeStore
 import de.neon.router.KnnClassifier
@@ -115,14 +116,20 @@ class NeonContainer(context: Context) {
 
     val outcomeStore = InMemoryRouteOutcomeStore()
 
-    private val database = NeonDatabase.create(appContext)
+    /**
+     * Träge erzeugt — Room öffnet die Datei erst beim ersten Zugriff, und ein Fehler dabei
+     * darf nicht den Start der ganzen App verhindern.
+     */
+    private val database by lazy { NeonDatabase.create(appContext) }
 
-    private val routingExamples = RoutingExampleRepository(
-        dao = database.routingExamples(),
-        expectedDimensions = HashingEmbeddingProvider.DEFAULT_DIMENSIONS,
-    )
+    private val routingExamples by lazy {
+        RoutingExampleRepository(
+            dao = database.routingExamples(),
+            expectedDimensions = HashingEmbeddingProvider.DEFAULT_DIMENSIONS,
+        )
+    }
 
-    private val memory = MemoryRepository(database.memoryFacts(), embeddings)
+    private val memory by lazy { MemoryRepository(database.memoryFacts(), embeddings) }
 
     /**
      * Lebt so lange wie die Anwendung.
@@ -140,13 +147,23 @@ class NeonContainer(context: Context) {
     init {
         // Gelernte Beispiele nachladen. Ohne das begänne der Router nach jedem Start wieder
         // bei der mitgelieferten Startmenge und die Lernschleife bliebe folgenlos.
+        //
+        // Im Hintergrund und gekapselt: Eine unlesbare Datenbank darf höchstens das
+        // Gelernte kosten, nicht den Start.
         scope.launch {
-            routingExamples.loadAll().forEach { router.learn(it) }
+            runCatching { routingExamples.loadAll().forEach { router.learn(it) } }
+                .onFailure { NeonLog.e(TAG, "Gelernte Beispiele nicht ladbar", it) }
         }
     }
 
-    private val asr = AndroidOnDeviceAsr(appContext)
-    private val tts = AndroidTts(appContext)
+    /**
+     * Ebenfalls träge. `AndroidTts` erzeugt im Konstruktor eine Verbindung zur
+     * Sprachausgabe des Systems, die Erkennung eine zum Erkennerdienst — beides braucht
+     * niemand, bevor zum ersten Mal gesprochen wird, und beides kann auf einem fremden
+     * Gerät fehlschlagen.
+     */
+    private val asr by lazy { AndroidOnDeviceAsr(appContext) }
+    private val tts by lazy { AndroidTts(appContext) }
     private val actionExecutor = DeviceActionExecutor(appContext)
 
     /**
@@ -172,7 +189,9 @@ class NeonContainer(context: Context) {
         actionExecutor = { actionExecutor.execute(it) },
         outcomeStore = outcomeStore,
         tools = tools,
-        memory = { query, limit -> memory.recall(query, limit) },
+        memory = { query, limit ->
+            runCatching { memory.recall(query, limit) }.getOrDefault(emptyList())
+        },
         learner = learner,
     )
 
@@ -264,6 +283,10 @@ class NeonContainer(context: Context) {
     fun close() {
         asr.close()
         tts.close()
+    }
+
+    private companion object {
+        const val TAG = "NeonContainer"
     }
 
     /** Ersatz, solange das VAD-Modell fehlt: lässt alles durch. */

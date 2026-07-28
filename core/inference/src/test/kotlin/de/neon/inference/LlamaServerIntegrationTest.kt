@@ -72,7 +72,10 @@ class LlamaServerIntegrationTest {
             "--host", "127.0.0.1",
             "--port", port.toString(),
             "--ctx-size", "2048",
-            "--threads", "4",
+            // Bewusst sparsam: Debug- und Release-Variante laufen parallel und starten je
+            // einen Server. Mit vier Threads je Instanz überlastet das den Rechner, und der
+            // Test scheitert an einer Zeitüberschreitung statt an einem echten Fehler.
+            "--threads", "2",
             "--jinja",
             "--no-webui",
         ).redirectErrorStream(true).start()
@@ -255,6 +258,6 @@ class LlamaServerIntegrationTest {
         val MODEL_PATH: String =
             System.getenv("NEON_TEST_MODEL") ?: "/opt/testmodels/test.gguf"
 
-        const val TIMEOUT_MILLIS = 120_000L
+        const val TIMEOUT_MILLIS = 180_000L
     }
 }

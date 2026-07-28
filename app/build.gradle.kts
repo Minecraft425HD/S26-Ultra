@@ -77,6 +77,14 @@ android {
         jvmTarget = "17"
     }
 
+    testOptions {
+        unitTests {
+            // Robolectric braucht die Ressourcen und das Manifest der App, um den Start
+            // nachzustellen. Ohne das kann der Starttest die Anwendung nicht erzeugen.
+            isIncludeAndroidResources = true
+        }
+    }
+
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
 
@@ -114,4 +122,8 @@ dependencies {
 
     testImplementation(libs.kotlin.test)
     testImplementation(libs.junit)
+    // Führt Android-Code auf der JVM aus. Damit lässt sich der Anwendungsstart prüfen,
+    // ohne ein Gerät — genau die Lücke, durch die ein Startabsturz ausgeliefert wurde.
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
 }
