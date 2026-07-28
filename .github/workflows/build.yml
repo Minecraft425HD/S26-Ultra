@@ -29,6 +29,20 @@ jobs:
       - name: Gradle einrichten
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Android SDK 36 sicherstellen
+        # Das Projekt baut gegen API 36. Ob das Runner-Abbild die gerade vorhält, ändert
+        # sich mit jeder Aktualisierung — und AGP lädt fehlende Plattformen nicht von
+        # selbst nach, sondern bricht ab. Der Aufruf ist schnell und kostet nichts, wenn
+        # ohnehin alles da ist.
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager nicht gefunden unter $SDKMANAGER"
+            exit 1
+          fi
+          yes 2>/dev/null | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
+
       - name: Tests
         # Der Integrationstest gegen einen echten llama-server überspringt sich hier
         # selbst — Server und Testmodell werden in CI nicht gebaut. Alles andere läuft.
