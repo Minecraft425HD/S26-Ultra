@@ -1,6 +1,7 @@
 package de.neon.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -41,6 +43,7 @@ import androidx.lifecycle.lifecycleScope
 import de.neon.audio.CascadeStats
 import de.neon.audio.WakeWordPipeline
 import de.neon.inference.ModelStore
+import de.neon.platform.NeonLog
 import de.neon.router.ModelSpec
 import de.neon.router.RouterStats
 import de.neon.service.NeonForegroundService
@@ -158,6 +161,7 @@ class MainActivity : ComponentActivity() {
                                 learnedExamples = container.learnedExampleCount,
                             )
                         },
+                        onShareLog = ::shareLog,
                         onSpeak = { withPermissions { NeonForegroundService.trigger(this) } },
                         onStart = { withPermissions { NeonForegroundService.start(this) } },
                         onStop = { NeonForegroundService.stop(this) },
@@ -187,6 +191,22 @@ class MainActivity : ComponentActivity() {
             pendingAction = action
             requestPermissions.launch(needed.toTypedArray())
         }
+    }
+
+    /**
+     * Schickt das Protokoll dorthin, wo du es lesen kannst.
+     *
+     * Ohne `adb` gibt es sonst keinen Weg an die Fehlermeldungen — und die entscheidende
+     * steht meistens in der Ausgabe von llama-server, nicht in dem, was Neon vorliest.
+     */
+    private fun shareLog() {
+        val text = NeonLog.fullText().ifBlank { "Das Protokoll ist leer." }
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "Neon-Protokoll")
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        startActivity(Intent.createChooser(intent, "Protokoll teilen"))
     }
 
     private fun hasPermission(permission: String): Boolean =
@@ -221,6 +241,7 @@ private fun NeonScreen(
     wakeWordThreshold: Float,
     onWakeWordThreshold: (Float) -> Unit,
     onImportModel: (String) -> Unit,
+    onShareLog: () -> Unit,
     onSpeak: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
@@ -327,6 +348,38 @@ private fun NeonScreen(
 
             if (showDiagnostics) {
                 diagnostics?.let { DiagnosticsCards(it) }
+
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("Protokoll", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Hier steht, warum etwas nicht geklappt hat — auch die Ausgabe " +
+                                "von llama-server. Neueste Zeile unten.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(Modifier.height(8.dp))
+
+                        val lines = remember(diagnostics) { NeonLog.recent(40) }
+                        if (lines.isEmpty()) {
+                            Text("Noch nichts protokolliert.", style = MaterialTheme.typography.bodySmall)
+                        } else {
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 260.dp)
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                lines.forEach {
+                                    Text(it, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(onClick = onShareLog) { Text("Protokoll teilen") }
+                    }
+                }
 
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {

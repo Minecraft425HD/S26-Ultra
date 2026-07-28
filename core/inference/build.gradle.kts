@@ -29,6 +29,7 @@ android {
 dependencies {
     // api, weil ModelSpec in den öffentlichen Signaturen dieses Moduls vorkommt.
     api(project(":core:router"))
+    implementation(project(":core:platform"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)

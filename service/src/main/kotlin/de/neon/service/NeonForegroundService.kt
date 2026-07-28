@@ -10,7 +10,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.IBinder
-import android.util.Log
+import de.neon.platform.NeonLog
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -95,7 +95,7 @@ class NeonForegroundService : LifecycleService() {
         }
 
         if (!hasMicrophonePermission()) {
-            Log.w(TAG, "ohne Mikrofonberechtigung kann Neon nicht lauschen")
+            NeonLog.w(TAG, "ohne Mikrofonberechtigung kann Neon nicht lauschen")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -120,7 +120,7 @@ class NeonForegroundService : LifecycleService() {
 
         val deps = dependencyFactory?.invoke(this)
         if (deps == null) {
-            Log.e(TAG, "keine Abhängigkeiten hinterlegt — der Dienst kann nicht starten")
+            NeonLog.e(TAG, "keine Abhängigkeiten hinterlegt — der Dienst kann nicht starten")
             stopSelf()
             return
         }
@@ -135,7 +135,7 @@ class NeonForegroundService : LifecycleService() {
 
                     is ListeningEvent.SpeechCaptured ->
                         runCatching { deps.orchestrator.handleUtterance(event.samples) }
-                            .onFailure { Log.e(TAG, "Durchgang fehlgeschlagen", it) }
+                            .onFailure { NeonLog.e(TAG, "Durchgang fehlgeschlagen", it) }
 
                     ListeningEvent.CaptureTimedOut -> deps.orchestrator.onIdle()
                 }

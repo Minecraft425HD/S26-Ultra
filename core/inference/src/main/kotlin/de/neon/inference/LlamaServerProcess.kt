@@ -1,7 +1,7 @@
 package de.neon.inference
 
 import android.content.Context
-import android.util.Log
+import de.neon.platform.NeonLog
 import java.io.File
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -67,17 +67,17 @@ class ProcessServerSupervisor(
 
         stopProcess()
         if (!isAvailable) {
-            Log.e(TAG, "llama-server fehlt unter ${binary.absolutePath}")
+            NeonLog.e(TAG, "llama-server fehlt unter ${binary.absolutePath}")
             return null
         }
         if (!file.isFile) {
-            Log.e(TAG, "Modelldatei fehlt: ${file.absolutePath}")
+            NeonLog.e(TAG, "Modelldatei fehlt: ${file.absolutePath}")
             return null
         }
 
         stopping.set(false)
         val started = runCatching { launch(file) }.getOrElse {
-            Log.e(TAG, "llama-server ließ sich nicht starten", it)
+            NeonLog.e(TAG, "llama-server ließ sich nicht starten", it)
             return null
         }
         process = started
@@ -127,7 +127,7 @@ class ProcessServerSupervisor(
         thread(name = "neon-llama-log", isDaemon = true) {
             runCatching {
                 process.inputStream.bufferedReader().useLines { lines ->
-                    lines.forEach { Log.d(TAG, it) }
+                    lines.forEach { NeonLog.d(TAG, it) }
                 }
             }
         }
@@ -138,13 +138,13 @@ class ProcessServerSupervisor(
         while (System.currentTimeMillis() < deadline) {
             if (stopping.get()) return false
             if (process?.isAlive != true) {
-                Log.e(TAG, "llama-server hat sich beim Start beendet")
+                NeonLog.e(TAG, "llama-server hat sich beim Start beendet")
                 return false
             }
             if (client.isHealthy()) return true
             Thread.sleep(HEALTH_POLL_MILLIS)
         }
-        Log.e(TAG, "llama-server war nach $STARTUP_TIMEOUT_MILLIS ms nicht bereit")
+        NeonLog.e(TAG, "llama-server war nach $STARTUP_TIMEOUT_MILLIS ms nicht bereit")
         return false
     }
 

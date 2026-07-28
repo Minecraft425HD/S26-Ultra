@@ -25,6 +25,9 @@ android {
 
     buildFeatures {
         compose = true
+        // Für die Versionsnummer im Protokoll. Ohne sie ist bei einem gemeldeten Fehler
+        // nicht erkennbar, welcher Stand überhaupt lief.
+        buildConfig = true
     }
 
     buildTypes {
