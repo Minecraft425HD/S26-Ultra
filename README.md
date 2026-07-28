@@ -1,1 +1,158 @@
-# S26-Ultra
+# Neon
+
+Ein Sprachassistent für das Samsung Galaxy S26 Ultra, der **mehrere lokale Sprachmodelle**
+verwaltet und für jede Frage das passende auswählt. Alles läuft auf dem Gerät.
+
+Die Grundidee: Ein Assistent, der jede Anfrage an dasselbe große Modell schickt,
+verschwendet Akku. Neon ordnet erst ein, was gefragt wurde, und wählt danach das kleinste
+Modell, das der Aufgabe gewachsen ist — für einen großen Teil der Alltagsbefehle gar keines.
+
+## Wie die Modellauswahl funktioniert
+
+Vier Stufen, jede teurer als die vorherige. Es wird nur so weit eskaliert, wie nötig.
+
+| Stufe | Verfahren | Kosten | Wofür |
+|---|---|---|---|
+| 0 | Feste deutsche Grammatik | keine Inferenz | „Timer fünf Minuten", „Licht aus", „wie spät" |
+| 1 | Embedding-kNN über gelernte Beispiele | ~10 ms | die große Mehrheit der Fragen |
+| 2 | Router-Modell (0.6B) mit erzwungenem JSON | ~100–300 ms | wenn Stufe 1 unsicher ist |
+| 3 | Punktebewertung der Modelle | — | wägt Qualität, Ladezeit und Energie ab |
+| 4 | Eskalation | nur im Zweifel | erst klein antworten, groß nachlegen |
+
+Stufe 0 ist der größte Einzelhebel: Jeder Treffer dort vermeidet eine Modellinferenz
+vollständig.
+
+Die wichtigste Regel in Stufe 3 ist die **Hysterese**. Ein bereits geladenes Modell, das die
+Aufgabe bewältigt, schlägt ein geringfügig besseres, das erst mehrere Sekunden lang von der
+Platte gelesen werden müsste — ein vermiedener Modellwechsel spart mehr Energie, als die
+etwas bessere Antwort wert ist. Bei einem klaren Qualitätsvorsprung, etwa dem Code-Spezialisten
+bei einer Programmierfrage, gewinnt trotzdem der Spezialist.
+
+Der Router **lernt mit**: Jeder Durchgang wird lokal protokolliert. Wer eine Frage innerhalb
+von zwanzig Sekunden umformuliert, war unzufrieden — daraus wächst die Beispielmenge für
+Stufe 1, ganz ohne Trainings-Infrastruktur.
+
+## Das Modell-Ensemble
+
+| Rolle | Kandidat (Q4) | Größe | Residenz |
+|---|---|---|---|
+| Router | Qwen3 0.6B | ~0,4 GB | dauerhaft |
+| Embeddings | EmbeddingGemma 300M | ~0,2 GB | dauerhaft |
+| Alltag | Qwen3 4B Instruct | ~2,5 GB | Standard |
+| Denker | Qwen3 8B | ~5,0 GB | auf Abruf |
+| Code | Qwen3 Coder 7B | ~4,5 GB | auf Abruf |
+| Bild | Gemma 3n E4B | ~3,0 GB | auf Abruf |
+
+Von 16 GB RAM belegt One UI etwa 6 GB; Neon hält höchstens 5 GB für Modelle belegt. Bei
+1 TB Speicher liegen alle gleichzeitig auf der Platte — gewechselt wird nur, was im RAM ist.
+Weil die Gewichte per `mmap` geladen werden und Linux zuletzt genutzte Seiten im Cache hält,
+kostet der Rückwechsel auf ein kürzlich benutztes Modell fast nichts.
+
+> Diese Aufstellung ist ein Startpunkt, kein Ergebnis. Welche Modelle und Quantisierungen
+> auf dem S26 Ultra wirklich das beste Verhältnis aus Geschwindigkeit, Speicher und
+> deutscher Sprachqualität liefern, muss auf dem Gerät gemessen werden.
+
+## Akku-Strategie
+
+Der Dauerlauscher ist der einzige echte Dauerverbraucher. Deshalb eine Kaskade, in der die
+teuren Stufen fast nie laufen:
+
+1. **Energie-Gatter** — rechnet nur die Lautstärke aus, praktisch kostenlos. Verwirft im
+   stillen Raum fast alles. Der Schwellwert folgt dem Grundrauschen, damit er in der Wohnung
+   und im Zug gleichermaßen funktioniert.
+2. **Silero-VAD** — läuft nur bei Geräusch. Sortiert Türenschlagen und Musik aus.
+3. **Weckwortmodell** — läuft nur bei erkannter Sprache.
+4. **Spracherkennung** — startet erst nach „Neon". Dauerhafte Spracherkennung wäre der
+   klassische Akkufresser und wird bewusst vermieden.
+
+Dazu die Energie-Policy: bei Hitze oder unter 20 % Akku nur kleine Modelle, am Ladegerät
+alles erlaubt.
+
+Die Hörschleife zählt mit, wie viele Blöcke jede Stufe erreichen (`CascadeStats`) — das ist
+die Messgröße, an der sich der Dauerverbrauch ablesen lässt. In der Oberfläche ist sie noch
+nicht sichtbar.
+
+## Aufbau
+
+```
+core/router/      Die gesamte Entscheidungslogik. Reines Kotlin, kein Android.
+core/audio/       Ringpuffer, Energie-Gatter, VAD, Weckwort, Hörschleife.
+core/speech/      Spracherkennung und -ausgabe.
+core/inference/   InferenceEngine, Modell-Lebenszyklus, llama.cpp-Anbindung.
+core/memory/      Room-Datenbank, Vektorsuche, Langzeitgedächtnis.
+core/tools/       Werkzeug-Framework und Android-Aktionen.
+core/platform/    Akku-, Hitze- und Netzzustand; verschlüsselte Ablage.
+service/          Vordergrunddienst, Zustandsautomat, Schnellzugriff-Kachel.
+app/              Oberfläche und Verdrahtung.
+```
+
+Dass `core/router` bewusst ohne Android-Abhängigkeiten auskommt, ist kein Selbstzweck: So
+läuft die gesamte Entscheidungslogik als gewöhnliche JVM-Unit-Tests, ohne Emulator und ohne
+Gerät.
+
+Vorgesehen, aber noch nicht umgesetzt: die Inferenz in einem eigenen Prozess
+(`android:process` plus AIDL), damit ein Modell, das den Speicher sprengt, nicht die
+Hörschleife mitreißt. Derzeit läuft alles in einem Prozess — der Ladefehler wird zwar
+sauber gemeldet, ein echter Speicherüberlauf würde aber die ganze App treffen.
+
+## Bauen
+
+```bash
+./gradlew :app:assembleDebug          # APK
+./gradlew test testDebugUnitTest      # alle Tests
+./gradlew :core:router:test           # nur die Router-Logik, ohne Android-SDK
+```
+
+Ein Android-SDK mit API 36 wird gebraucht (`local.properties` mit `sdk.dir=…`), ein NDK nur
+für den nativen Teil.
+
+### Modelle besorgen
+
+```bash
+./scripts/fetch-models.sh wakeword    # Weckwort- und VAD-Modelle, wenige MB
+./scripts/fetch-models.sh llm         # Anleitung für die Sprachmodelle
+```
+
+Das Weckwortmodell für „Neon" muss selbst trainiert werden — dafür gibt es niemanden, der
+es vorher gebaut hätte. `fetch-models.sh` erklärt den Weg über openWakeWord. **Empfehlung:**
+zusätzlich „Hey Neon" trainieren. Zwei Silben allein lösen erfahrungsgemäß häufiger falsch
+aus, und „Neonlicht" oder „Neonfarbe" gehören unbedingt als Gegenbeispiele ins Training.
+
+Fehlen die Modelle, startet Neon trotzdem: Die Regelstufe, die Spracherkennung und die
+Sprachausgabe funktionieren, ausgelöst wird dann über die App oder die Kachel.
+
+### Lokale Inferenz
+
+```bash
+./scripts/fetch-native-deps.sh
+./gradlew :app:assembleDebug -Pneon.buildNative=true
+```
+
+Ohne diesen Schritt baut die App normal; nur die Antwortgenerierung meldet dann, dass die
+native Bibliothek fehlt.
+
+## Warum es keinen Autostart nach dem Neustart gibt
+
+Android 16 verbietet es, aus `BOOT_COMPLETED` heraus einen Mikrofondienst zu starten — und
+das ist richtig so. Neon legt nach einem Neustart stattdessen eine Benachrichtigung an; ein
+Tippen darauf gilt als Nutzerhandlung und erlaubt den Start. Androids stromsparende
+Hotword-Schnittstelle (`AlwaysOnHotwordDetector`) steht seit Android 12 nur noch System-Apps
+offen, ist für eine sideloadbare App also keine Option.
+
+## Stand
+
+Fertig und getestet: Router mit allen vier Stufen, Hörschleife, Modell-Lebenszyklus,
+Werkzeug-Framework, Gesprächsablauf, Vordergrunddienst, Oberfläche. 200 Unit-Tests.
+
+Noch offen: Weckwortmodell trainieren, Stufen 1 und 2 mit echten Modellen verdrahten (bis
+dahin greift der Rückfall auf das Alltagsmodell), Langzeitgedächtnis und Werkzeuge an den
+Ablauf anschließen, NPU-Pfad, Messung auf dem Gerät.
+
+Die JNI-Brücke unter `core/inference/src/main/cpp/` ist die einzige Datei im Projekt, die
+noch nie kompiliert wurde — sie braucht NDK und llama.cpp-Quellen, die beide nicht im
+Repository liegen. llama.cpp ändert seine API regelmäßig; beim ersten Bauen ist mit
+Anpassungen zu rechnen.
+
+## Lizenz
+
+GPL-3.0

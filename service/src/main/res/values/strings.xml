@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="neon_name">Neon</string>
+    <string name="neon_listening">Hört auf „Neon“</string>
+    <string name="neon_stop">Beenden</string>
+
+    <string name="neon_channel_name">Neon läuft</string>
+    <string name="neon_channel_description">Zeigt an, dass Neon auf seinen Namen hört. Diese Benachrichtigung ist vorgeschrieben, solange das Mikrofon aktiv ist.</string>
+
+    <string name="neon_boot_channel_name">Neon nach dem Neustart</string>
+    <string name="neon_boot_title">Neon aktivieren</string>
+    <string name="neon_boot_text">Antippen, damit Neon wieder auf seinen Namen hört.</string>
+</resources>
