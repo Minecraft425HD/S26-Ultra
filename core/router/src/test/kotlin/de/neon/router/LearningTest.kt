@@ -114,6 +114,19 @@ class SignalInferenceTest {
     }
 
     @Test
+    fun `im Graubereich wird kein Signal behauptet`() {
+        // Verwandt genug für Zweifel, zu unähnlich für Gewissheit. Hier als "zufrieden" zu
+        // werten hieße, eine womöglich falsche Route als gutes Beispiel abzuspeichern.
+        val signal = SignalInference.infer(
+            previous = outcome(0),
+            nextText = "nein ich meinte den kölner dom",
+            nextTimestampMillis = 4_000,
+            similarityToPrevious = 0.47,
+        )
+        assertEquals(UserSignal.UNBEKANNT, signal)
+    }
+
+    @Test
     fun `eine andere Frage kurz danach ist keine Umformulierung`() {
         val signal = SignalInference.infer(
             previous = outcome(0),

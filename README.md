@@ -14,7 +14,7 @@ Vier Stufen, jede teurer als die vorherige. Es wird nur so weit eskaliert, wie n
 | Stufe | Verfahren | Kosten | Wofür |
 |---|---|---|---|
 | 0 | Feste deutsche Grammatik | keine Inferenz | „Timer fünf Minuten", „Licht aus", „wie spät" |
-| 1 | Embedding-kNN über gelernte Beispiele | ~10 ms | die große Mehrheit der Fragen |
+| 1 | Ähnlichkeitssuche über gelernte Beispiele | ~10 ms | die große Mehrheit der Fragen |
 | 2 | Router-Modell (0.6B) mit erzwungenem JSON | ~100–300 ms | wenn Stufe 1 unsicher ist |
 | 3 | Punktebewertung der Modelle | — | wägt Qualität, Ladezeit und Energie ab |
 | 4 | Eskalation | nur im Zweifel | erst klein antworten, groß nachlegen |
@@ -22,15 +22,32 @@ Vier Stufen, jede teurer als die vorherige. Es wird nur so weit eskaliert, wie n
 Stufe 0 ist der größte Einzelhebel: Jeder Treffer dort vermeidet eine Modellinferenz
 vollständig.
 
+Stufe 1 kommt **ohne Modelldatei** aus. Sie misst Ähnlichkeit über gehashte Zeichen-n-Gramme
+und Wörter statt über ein neuronales Einbettungsmodell — das erfasst keine Bedeutung, dafür
+läuft es vom ersten Start an, ohne Download und ohne Tokenizer. Gemessen an
+fünfundzwanzig Äußerungen, die nicht in der Startmenge stehen: 88 Prozent richtig
+einsortiert, ein selbstbewusster Fehlgriff, zwei Fälle sauber an Stufe 2 weitergereicht.
+Die Grenze zeigt derselbe Test: „wer hat die Glühbirne **erfunden**" landet falsch, weil
+„erfunden" und „entwickelt" sich keine Buchstaben teilen. Ein neuronaler Einbetter löst das
+und kann über dieselbe Schnittstelle an die Stelle treten.
+
 Die wichtigste Regel in Stufe 3 ist die **Hysterese**. Ein bereits geladenes Modell, das die
 Aufgabe bewältigt, schlägt ein geringfügig besseres, das erst mehrere Sekunden lang von der
 Platte gelesen werden müsste — ein vermiedener Modellwechsel spart mehr Energie, als die
 etwas bessere Antwort wert ist. Bei einem klaren Qualitätsvorsprung, etwa dem Code-Spezialisten
 bei einer Programmierfrage, gewinnt trotzdem der Spezialist.
 
-Der Router **lernt mit**: Jeder Durchgang wird lokal protokolliert. Wer eine Frage innerhalb
-von zwanzig Sekunden umformuliert, war unzufrieden — daraus wächst die Beispielmenge für
+Der Router **lernt mit**: Jeder Durchgang wird zurückgehalten und erst bewertet, wenn die
+nächste Frage kommt. Wer innerhalb von zwanzig Sekunden fast dasselbe noch einmal fragt, war
+unzufrieden; wer das Thema wechselt, offenbar nicht. Daraus wächst die Beispielmenge für
 Stufe 1, ganz ohne Trainings-Infrastruktur.
+
+Dazwischen liegt bewusst ein Graubereich, in dem **nichts** gelernt wird. Die beiden Fehler
+wiegen nämlich unterschiedlich schwer: Eine übersehene Umformulierung würde eine
+nachweislich schlechte Route als gutes Beispiel abspeichern und den Klassifikator aktiv
+verschlechtern — ein übersehenes Lob kostet nur ein Beispiel, das man ohnehin nicht
+gebraucht hätte. Die Grenzen liegen in der gemessenen Lücke: Umformulierungen erreichen
+0,47 bis 0,85 Ähnlichkeit, Themenwechsel unter 0,05.
 
 ## Das Modell-Ensemble
 
@@ -68,9 +85,9 @@ teuren Stufen fast nie laufen:
 Dazu die Energie-Policy: bei Hitze oder unter 20 % Akku nur kleine Modelle, am Ladegerät
 alles erlaubt.
 
-Die Hörschleife zählt mit, wie viele Blöcke jede Stufe erreichen (`CascadeStats`) — das ist
-die Messgröße, an der sich der Dauerverbrauch ablesen lässt. In der Oberfläche ist sie noch
-nicht sichtbar.
+Der Diagnose-Screen in der App zeigt die Durchlassquoten der Audiostufen und den Anteil der
+Anfragen, die ganz ohne Sprachmodell beantwortet wurden. Beides sind die Größen, an denen
+sich ablesen lässt, ob Neon tatsächlich sparsam arbeitet — statt es nur zu behaupten.
 
 ## Aufbau
 
@@ -141,12 +158,14 @@ offen, ist für eine sideloadbare App also keine Option.
 
 ## Stand
 
-Fertig und getestet: Router mit allen vier Stufen, Hörschleife, Modell-Lebenszyklus,
-Werkzeug-Framework, Gesprächsablauf, Vordergrunddienst, Oberfläche. 200 Unit-Tests.
+Fertig und getestet: Router mit allen vier Stufen inklusive Ähnlichkeitssuche und
+Router-Modell, Lernschleife, Hörschleife, Modell-Lebenszyklus, Werkzeug-Framework mit
+Kalender- und Nachrichten-Werkzeug, Gedächtnis-Kontext, Gesprächsablauf, Vordergrunddienst,
+Oberfläche mit Diagnose-Screen. **257 Unit-Tests.**
 
-Noch offen: Weckwortmodell trainieren, Stufen 1 und 2 mit echten Modellen verdrahten (bis
-dahin greift der Rückfall auf das Alltagsmodell), Langzeitgedächtnis und Werkzeuge an den
-Ablauf anschließen, NPU-Pfad, Messung auf dem Gerät.
+Noch offen: Weckwortmodell trainieren, Erinnerungen dauerhaft in Room ablegen (bisher hält
+nur die Sitzung sie), Trennung von Inferenz und Hörschleife in eigene Prozesse, NPU-Pfad,
+Messung auf dem Gerät.
 
 Die JNI-Brücke unter `core/inference/src/main/cpp/` ist die einzige Datei im Projekt, die
 noch nie kompiliert wurde — sie braucht NDK und llama.cpp-Quellen, die beide nicht im

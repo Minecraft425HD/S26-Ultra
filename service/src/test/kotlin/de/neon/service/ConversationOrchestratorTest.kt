@@ -5,16 +5,28 @@ import de.neon.inference.GenerationRequest
 import de.neon.inference.InferenceEngine
 import de.neon.inference.ModelFileResolver
 import de.neon.inference.ModelLifecycleManager
+import de.neon.router.AnalysisSource
 import de.neon.router.DeviceAction
 import de.neon.router.DeviceState
+import de.neon.router.HashingEmbeddingProvider
 import de.neon.router.InMemoryRouteOutcomeStore
+import de.neon.router.LabeledExample
 import de.neon.router.ModelRegistry
 import de.neon.router.ModelSpec
+import de.neon.router.RouteAnalysis
 import de.neon.router.Router
+import de.neon.router.RouterLlm
 import de.neon.router.SelectionPolicy
+import de.neon.router.TaskCategory
 import de.neon.speech.AsrEngine
 import de.neon.speech.Transcript
 import de.neon.speech.TtsEngine
+import de.neon.tools.ParameterType
+import de.neon.tools.Tool
+import de.neon.tools.ToolParameter
+import de.neon.tools.ToolRegistry
+import de.neon.tools.ToolResult
+import de.neon.tools.ToolSpec
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
@@ -70,7 +82,10 @@ class ConversationOrchestratorTest {
             loadedModelId = null
         }
 
+        var lastRequest: GenerationRequest? = null
+
         override fun generate(request: GenerationRequest): Flow<GenerationChunk> = flow {
+            lastRequest = request
             if (failure != null) {
                 emit(GenerationChunk.Failed(failure))
                 return@flow
@@ -90,10 +105,14 @@ class ConversationOrchestratorTest {
         actionResult: String? = "Timer läuft.",
         outcomeStore: InMemoryRouteOutcomeStore = InMemoryRouteOutcomeStore(),
         actions: MutableList<DeviceAction> = mutableListOf(),
+        routerLlm: RouterLlm? = null,
+        tools: ToolRegistry? = null,
+        memory: MemoryRecall? = null,
+        learner: TurnLearner? = null,
     ): Pair<ConversationOrchestrator, InMemoryRouteOutcomeStore> {
         val resolver = ModelFileResolver { if (modelsAvailable) File("/dev/null") else null }
         val lifecycle = ModelLifecycleManager(engine, resolver)
-        val router = Router(registry, SelectionPolicy(registry))
+        val router = Router(registry, SelectionPolicy(registry), routerLlm = routerLlm)
 
         return ConversationOrchestrator(
             router = router,
@@ -108,7 +127,37 @@ class ConversationOrchestratorTest {
             },
             outcomeStore = outcomeStore,
             clock = { 0L },
+            tools = tools,
+            memory = memory,
+            learner = learner,
         ) to outcomeStore
+    }
+
+    /** Zwingt den Router in eine bestimmte Kategorie, ohne Modelldateien zu brauchen. */
+    private fun fixedRoute(category: TaskCategory, complexity: Int = 2) = RouterLlm {
+        RouteAnalysis(
+            category = category,
+            complexity = complexity,
+            confidence = 0.9,
+            source = AnalysisSource.ROUTER_LLM,
+        )
+    }
+
+    private val wlanTool = object : Tool {
+        var called: Map<String, String>? = null
+
+        override val spec = ToolSpec(
+            name = "wlan",
+            description = "Schaltet das WLAN",
+            parameters = listOf(
+                ToolParameter("zustand", ParameterType.STRING, "an oder aus", allowedValues = listOf("an", "aus")),
+            ),
+        )
+
+        override suspend fun execute(arguments: Map<String, String>): ToolResult {
+            called = arguments
+            return ToolResult.Ok("WLAN ist jetzt ${arguments["zustand"]}.")
+        }
     }
 
     private val samples = ShortArray(16_000)
@@ -259,6 +308,123 @@ class ConversationOrchestratorTest {
 
         // Die angehobene Komplexität muss im Protokoll sichtbar sein.
         assertTrue(store.recent(1).single().analysis.complexity >= 4)
+    }
+
+    @Test
+    fun `fuehrt bei einer Handlung ein Werkzeug aus`() = runTest {
+        val tts = FakeTts()
+        val engine = FakeEngine(
+            listOf("""{"werkzeug":"wlan","argumente":{"zustand":"an"}}""")
+        )
+        val (orchestrator, _) = orchestrator(
+            asr = FakeAsr(Transcript("mach das wlan an", 0.9f, "de-DE")),
+            tts = tts,
+            engine = engine,
+            routerLlm = fixedRoute(TaskCategory.GERAETE_AKTION),
+            tools = ToolRegistry(listOf(wlanTool)),
+        )
+
+        val report = orchestrator.handleUtterance(samples)
+
+        assertNotNull(report)
+        assertEquals(mapOf("zustand" to "an"), wlanTool.called)
+        assertEquals("WLAN ist jetzt an.", tts.spoken.single())
+        assertTrue(report.routeReason.contains("wlan"))
+        // Ohne erzwungene Grammatik würde ein kleines Modell beschreiben statt aufzurufen.
+        assertNotNull(engine.lastRequest?.grammar)
+    }
+
+    @Test
+    fun `bietet Werkzeuge nur bei Handlungen an`() = runTest {
+        // Bei einer Wissensfrage würden Werkzeugbeschreibungen nur den Kontext füllen und
+        // ein kleines Modell dazu verleiten, die Antwort als Werkzeugaufruf zu formulieren.
+        val engine = FakeEngine(listOf("Der Eiffelturm ist 330 Meter hoch."))
+        val (orchestrator, _) = orchestrator(
+            asr = FakeAsr(Transcript("wie hoch ist der eiffelturm", 0.9f, "de-DE")),
+            tts = FakeTts(),
+            engine = engine,
+            routerLlm = fixedRoute(TaskCategory.WISSENSFRAGE),
+            tools = ToolRegistry(listOf(wlanTool)),
+        )
+
+        orchestrator.handleUtterance(samples)
+
+        assertNull(engine.lastRequest?.grammar)
+        assertTrue(engine.lastRequest?.messages?.first()?.content?.contains("wlan") != true)
+    }
+
+    @Test
+    fun `sagt Bescheid wenn kein gueltiger Werkzeugaufruf herauskommt`() = runTest {
+        val tts = FakeTts()
+        val (orchestrator, _) = orchestrator(
+            asr = FakeAsr(Transcript("mach irgendwas", 0.9f, "de-DE")),
+            tts = tts,
+            engine = FakeEngine(listOf("Ich würde jetzt das WLAN einschalten.")),
+            routerLlm = fixedRoute(TaskCategory.GERAETE_AKTION),
+            tools = ToolRegistry(listOf(wlanTool)),
+        )
+
+        val report = orchestrator.handleUtterance(samples)
+
+        assertNotNull(report)
+        assertNull(wlanTool.called)
+        assertTrue(tts.spoken.single().isNotBlank())
+    }
+
+    @Test
+    fun `gibt Erinnerungen als Kontext an das Modell weiter`() = runTest {
+        val engine = FakeEngine(listOf("Dann lasse ich den Koriander weg."))
+        val (orchestrator, _) = orchestrator(
+            asr = FakeAsr(Transcript("schlag mir ein rezept vor", 0.9f, "de-DE")),
+            tts = FakeTts(),
+            engine = engine,
+            memory = { _, _ -> listOf("mag keinen Koriander") },
+        )
+
+        orchestrator.handleUtterance(samples)
+
+        val systemPrompt = assertNotNull(engine.lastRequest).messages.first().content
+        assertTrue(
+            systemPrompt.contains("mag keinen Koriander"),
+            "Erinnerung fehlt im Systemprompt: $systemPrompt",
+        )
+    }
+
+    @Test
+    fun `ein Fehler im Gedaechtnis stoppt den Durchgang nicht`() = runTest {
+        val (orchestrator, _) = orchestrator(
+            asr = FakeAsr(Transcript("wie hoch ist der eiffelturm", 0.9f, "de-DE")),
+            tts = FakeTts(),
+            engine = FakeEngine(listOf("330 Meter.")),
+            memory = { _, _ -> error("Datenbank nicht erreichbar") },
+        )
+
+        val report = orchestrator.handleUtterance(samples)
+
+        assertNotNull(report)
+        assertEquals("330 Meter.", report.answer)
+    }
+
+    @Test
+    fun `uebergibt jeden Durchgang an die Lernschleife`() = runTest {
+        val learnedExamples = mutableListOf<LabeledExample>()
+        val turnLearner = TurnLearner(HashingEmbeddingProvider()) { learnedExamples += it }
+
+        val (orchestrator, _) = orchestrator(
+            asr = FakeAsr(Transcript("wie hoch ist der eiffelturm", 0.9f, "de-DE")),
+            tts = FakeTts(),
+            engine = FakeEngine(listOf("330 Meter.")),
+            routerLlm = fixedRoute(TaskCategory.WISSENSFRAGE),
+            learner = turnLearner,
+        )
+
+        orchestrator.handleUtterance(samples)
+        // Noch nichts gelernt — das Urteil fällt erst mit der nächsten Äußerung.
+        assertTrue(learnedExamples.isEmpty())
+
+        orchestrator.shutdown()
+        assertEquals(1, learnedExamples.size)
+        assertEquals(TaskCategory.WISSENSFRAGE, learnedExamples.single().category)
     }
 
     @Test

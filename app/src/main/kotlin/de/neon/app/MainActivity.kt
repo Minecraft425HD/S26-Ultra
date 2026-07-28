@@ -24,6 +24,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,10 +34,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import de.neon.audio.CascadeStats
 import de.neon.router.ModelSpec
+import de.neon.router.RouterStats
 import de.neon.service.NeonForegroundService
 import de.neon.service.NeonState
 import de.neon.service.TurnReport
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
 
@@ -65,6 +69,14 @@ class MainActivity : ComponentActivity() {
                         models = container.registry.generativeModels(),
                         isModelAvailable = { container.modelStore.isAvailable(it) },
                         wakeWordAvailable = container.wakeWordAvailable,
+                        readDiagnostics = {
+                            Diagnostics(
+                                cascade = container.cascadeStats,
+                                router = container.routerStats(),
+                                knownExamples = container.knownExampleCount,
+                                learnedExamples = container.learnedExampleCount,
+                            )
+                        },
                         onStart = ::ensurePermissionsAndStart,
                         onStop = { NeonForegroundService.stop(this) },
                     )
@@ -95,6 +107,14 @@ class MainActivity : ComponentActivity() {
         ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 }
 
+/** Momentaufnahme der Kennzahlen für den Diagnose-Screen. */
+private data class Diagnostics(
+    val cascade: CascadeStats?,
+    val router: RouterStats,
+    val knownExamples: Int,
+    val learnedExamples: Int,
+)
+
 @Composable
 private fun NeonScreen(
     state: NeonState,
@@ -102,10 +122,22 @@ private fun NeonScreen(
     models: List<ModelSpec>,
     isModelAvailable: (ModelSpec) -> Boolean,
     wakeWordAvailable: Boolean,
+    readDiagnostics: () -> Diagnostics,
     onStart: () -> Unit,
     onStop: () -> Unit,
 ) {
     var showDiagnostics by remember { mutableStateOf(false) }
+    var diagnostics by remember { mutableStateOf<Diagnostics?>(null) }
+
+    // Die Kennzahlen werden gepollt statt beobachtet: Sie ändern sich fünfzig Mal je
+    // Sekunde, und die Oberfläche jedes Mal neu zu zeichnen wäre genau die Art von
+    // Stromverbrauch, die dieser Screen eigentlich messen soll.
+    LaunchedEffect(showDiagnostics) {
+        while (showDiagnostics) {
+            diagnostics = readDiagnostics()
+            delay(1_000)
+        }
+    }
 
     Scaffold { padding ->
         Column(
@@ -165,10 +197,12 @@ private fun NeonScreen(
             }
 
             OutlinedButton(onClick = { showDiagnostics = !showDiagnostics }) {
-                Text(if (showDiagnostics) "Modelle ausblenden" else "Modelle anzeigen")
+                Text(if (showDiagnostics) "Diagnose ausblenden" else "Diagnose anzeigen")
             }
 
             if (showDiagnostics) {
+                diagnostics?.let { DiagnosticsCards(it) }
+
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
                         Text("Modelle", style = MaterialTheme.typography.titleMedium)
@@ -193,6 +227,86 @@ private fun NeonScreen(
         }
     }
 }
+
+/**
+ * Die beiden Karten, an denen sich ablesen lässt, ob Neon effizient arbeitet.
+ *
+ * Die Durchlassquoten zeigen, wie gut die Audio-Kaskade filtert — je weniger Blöcke bis zum
+ * Weckwortmodell durchkommen, desto sparsamer der Dauerbetrieb. Der Anteil der Anfragen
+ * ohne Sprachmodell zeigt dasselbe eine Ebene höher.
+ */
+@Composable
+private fun DiagnosticsCards(diagnostics: Diagnostics) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Hörschleife", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+
+            val cascade = diagnostics.cascade
+            if (cascade == null || cascade.framesRead == 0L) {
+                Text("Noch keine Audioblöcke verarbeitet.", style = MaterialTheme.typography.bodyMedium)
+            } else {
+                Text("Blöcke gelesen: ${cascade.framesRead}", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "durch das Energie-Gatter: ${percent(cascade.gatePassRate)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "davon Sprache laut VAD: ${percent(cascade.vadPassRate)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "Weckwort erkannt: ${cascade.wakeWordHits} mal",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Je kleiner die zweite Zahl, desto sparsamer läuft Neon im Leerlauf.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Router", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+
+            val router = diagnostics.router
+            if (router.total == 0) {
+                Text("Noch keine Anfragen.", style = MaterialTheme.typography.bodyMedium)
+            } else {
+                Text("Anfragen: ${router.total}", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "ohne Sprachmodell beantwortet: ${percent(router.directActionShare)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "Median-Dauer: ${router.medianLatencyMs} ms",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(6.dp))
+                router.perModel.forEach { (modelId, stats) ->
+                    Text(
+                        "$modelId: ${stats.count}×, ${stats.medianLatencyMs} ms, " +
+                            "${stats.totalTokens} Token",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Beispiele für die Einordnung: ${diagnostics.knownExamples} " +
+                    "(davon ${diagnostics.learnedExamples} aus dieser Sitzung gelernt)",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+private fun percent(value: Double): String = "%.1f %%".format(value * 100)
 
 private fun describe(state: NeonState): String = when (state) {
     NeonState.GESTOPPT -> "Gestoppt"

@@ -109,7 +109,21 @@ object SignalInference {
     const val REPHRASE_WINDOW_MILLIS = 20_000L
 
     /** Ab dieser Ähnlichkeit gilt eine Äußerung als dieselbe Frage. */
-    const val REPHRASE_SIMILARITY = 0.8
+    const val REPHRASE_SIMILARITY = 0.75
+
+    /**
+     * Unterhalb dieser Ähnlichkeit ist die nächste Frage klar ein anderes Thema.
+     *
+     * Dazwischen liegt ein Graubereich, in dem bewusst **nichts** gelernt wird. Der Grund
+     * ist die Schieflage der beiden Fehler: Eine übersehene Umformulierung führt dazu, dass
+     * eine nachweislich schlechte Route als gutes Beispiel abgespeichert wird — der
+     * Klassifikator wird also aktiv schlechter. Ein übersehenes Lob kostet dagegen nur ein
+     * Beispiel, das man ohnehin nicht gebraucht hätte.
+     *
+     * Gemessen an echten Formulierungen: Umformulierungen liegen bei 0,47 bis 0,85,
+     * Themenwechsel unter 0,05. Die Grenze liegt in der Lücke dazwischen.
+     */
+    const val AMBIGUOUS_SIMILARITY = 0.30
 
     private val deeperRequest = Regex(
         "\\b(denk nochmal|denke nochmal|genauer|gründlicher|gruendlicher|" +
@@ -128,10 +142,15 @@ object SignalInference {
         if (previous == null) return UserSignal.UNBEKANNT
 
         val elapsed = nextTimestampMillis - previous.timestampMillis
-        val isQuickRepeat = elapsed in 0..REPHRASE_WINDOW_MILLIS &&
-            similarityToPrevious >= REPHRASE_SIMILARITY
+        val withinWindow = elapsed in 0..REPHRASE_WINDOW_MILLIS
+        if (!withinWindow) return UserSignal.ZUFRIEDEN
 
-        return if (isQuickRepeat) UserSignal.UMFORMULIERT else UserSignal.ZUFRIEDEN
+        return when {
+            similarityToPrevious >= REPHRASE_SIMILARITY -> UserSignal.UMFORMULIERT
+            // Graubereich: verwandt genug, um Zweifel zu wecken, zu unähnlich für Gewissheit.
+            similarityToPrevious >= AMBIGUOUS_SIMILARITY -> UserSignal.UNBEKANNT
+            else -> UserSignal.ZUFRIEDEN
+        }
     }
 }
 

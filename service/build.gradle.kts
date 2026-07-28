@@ -26,7 +26,8 @@ dependencies {
     implementation(project(":core:audio"))
     implementation(project(":core:speech"))
     implementation(project(":core:memory"))
-    implementation(project(":core:tools"))
+    // api, weil ToolRegistry im Konstruktor des Orchestrators vorkommt.
+    api(project(":core:tools"))
     implementation(project(":core:platform"))
 
     implementation(libs.androidx.core.ktx)
