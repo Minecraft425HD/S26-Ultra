@@ -17,18 +17,6 @@ android {
         }
     }
 
-    // Der native Teil (llama.cpp) wird nur gebaut, wenn die Quellen da sind und es
-    // ausdrücklich verlangt wurde. Siehe scripts/fetch-native-deps.sh.
-    val buildNative = providers.gradleProperty("neon.buildNative").orNull == "true"
-    if (buildNative) {
-        externalNativeBuild {
-            cmake {
-                path = file("src/main/cpp/CMakeLists.txt")
-                version = "3.22.1"
-            }
-        }
-    }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -44,6 +32,8 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
+    // api, weil LlamaServerClient in den öffentlichen Signaturen vorkommt.
+    api(libs.okhttp)
 
     testImplementation(libs.kotlin.test)
     testImplementation(libs.junit)

@@ -11,10 +11,14 @@ import de.neon.audio.SpeechSegmenter
 import de.neon.audio.VoiceActivityDetector
 import de.neon.audio.WakeWordDetector
 import de.neon.audio.WakeWordPipeline
-import de.neon.inference.LlamaCppEngine
+import de.neon.inference.LlamaServerEngine
 import de.neon.inference.LocalRouterLlm
 import de.neon.inference.ModelLifecycleManager
 import de.neon.inference.ModelStore
+import de.neon.inference.ProcessServerSupervisor
+import de.neon.memory.MemoryRepository
+import de.neon.memory.NeonDatabase
+import de.neon.memory.RoutingExampleRepository
 import de.neon.platform.DeviceStateProvider
 import de.neon.router.HashingEmbeddingProvider
 import de.neon.router.InMemoryRouteOutcomeStore
@@ -34,7 +38,11 @@ import de.neon.tools.CalendarEventTool
 import de.neon.tools.ComposeMessageTool
 import de.neon.tools.DeviceActionExecutor
 import de.neon.tools.ToolRegistry
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
 import java.io.File
 
 /**
@@ -52,18 +60,17 @@ class NeonContainer(context: Context) {
 
     val modelStore = ModelStore(File(appContext.filesDir, "models"))
 
-    /** Motor für die Antwortmodelle. */
-    private val answerEngine = LlamaCppEngine()
-
     /**
-     * Ein **zweiter** Motor allein für das Router-Modell.
+     * Startet und überwacht den mitgelieferten `llama-server`.
      *
-     * Liefe die Einordnung über denselben Motor, müsste für jede Klassifikation das
-     * Alltagsmodell entladen und danach wieder geladen werden — die Frage einzuordnen wäre
-     * dann teurer als sie zu beantworten. Das 0.6B-Modell belegt dauerhaft rund 400 MB;
-     * dafür kostet Stufe 2 nur noch Millisekunden.
+     * Er läuft als eigener Prozess: Ein Modell, das den Speicher sprengt, reißt damit nicht
+     * die Hörschleife mit — Neon kann weiter zuhören und melden, dass es nicht geklappt hat.
      */
-    private val routerEngine = LlamaCppEngine(threadCount = 2)
+    private val serverSupervisor = ProcessServerSupervisor(appContext)
+
+    val inferenceAvailable: Boolean get() = serverSupervisor.isAvailable
+
+    private val answerEngine = LlamaServerEngine(serverSupervisor)
 
     val lifecycle = ModelLifecycleManager(answerEngine, modelStore)
 
@@ -88,9 +95,15 @@ class NeonContainer(context: Context) {
         minMargin = 0.10,
     )
 
-    private val routerLlm = registry.withRole(ModelRole.ROUTER).firstOrNull()?.let { spec ->
-        LocalRouterLlm(routerEngine, spec, modelStore)
-    }
+    /**
+     * Stufe 2 läuft auf demselben Modell, das gerade antwortet.
+     *
+     * Ein eigenes Router-Modell wäre schneller, bräuchte aber einen zweiten Serverprozess —
+     * llama-server bedient je Lauf genau ein Modell. Solange nur das Alltagsmodell geladen
+     * ist, wäre das ein zweiter Speicherblock für eine Einordnung, die auch so wenige
+     * hundert Millisekunden dauert.
+     */
+    private val routerLlm = LocalRouterLlm(answerEngine)
 
     val router = Router(
         registry = registry,
@@ -102,7 +115,35 @@ class NeonContainer(context: Context) {
 
     val outcomeStore = InMemoryRouteOutcomeStore()
 
-    private val learner = TurnLearner(embeddings) { router.learn(it) }
+    private val database = NeonDatabase.create(appContext)
+
+    private val routingExamples = RoutingExampleRepository(
+        dao = database.routingExamples(),
+        expectedDimensions = HashingEmbeddingProvider.DEFAULT_DIMENSIONS,
+    )
+
+    private val memory = MemoryRepository(database.memoryFacts(), embeddings)
+
+    /**
+     * Lebt so lange wie die Anwendung.
+     *
+     * Bewusst kein Scope des Dienstes: Die gelernten Beispiele sollen auch dann noch
+     * geschrieben werden, wenn Neon gerade beendet wurde.
+     */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private val learner = TurnLearner(embeddings) { example ->
+        router.learn(example)
+        scope.launch { routingExamples.save(example) }
+    }
+
+    init {
+        // Gelernte Beispiele nachladen. Ohne das begänne der Router nach jedem Start wieder
+        // bei der mitgelieferten Startmenge und die Lernschleife bliebe folgenlos.
+        scope.launch {
+            routingExamples.loadAll().forEach { router.learn(it) }
+        }
+    }
 
     private val asr = AndroidOnDeviceAsr(appContext)
     private val tts = AndroidTts(appContext)
@@ -131,6 +172,7 @@ class NeonContainer(context: Context) {
         actionExecutor = { actionExecutor.execute(it) },
         outcomeStore = outcomeStore,
         tools = tools,
+        memory = { query, limit -> memory.recall(query, limit) },
         learner = learner,
     )
 
@@ -139,6 +181,21 @@ class NeonContainer(context: Context) {
     private var pipeline: WakeWordPipeline? = null
 
     val cascadeStats: CascadeStats? get() = pipeline?.stats
+
+    /**
+     * Der Schwellwert, ab dem „Hey Neon" als gesagt gilt.
+     *
+     * Wird hier gehalten und nicht nur in der Hörschleife, damit eine Änderung auch den
+     * nächsten Dienststart überdauert. Der richtige Wert hängt von der Umgebung ab — in
+     * einer stillen Wohnung darf er niedriger stehen als bei laufendem Fernseher.
+     */
+    @Volatile
+    var wakeWordThreshold: Float = WakeWordPipeline.DEFAULT_WAKE_WORD_THRESHOLD
+        set(value) {
+            val clamped = value.coerceIn(WakeWordPipeline.MIN_THRESHOLD, WakeWordPipeline.MAX_THRESHOLD)
+            field = clamped
+            pipeline?.wakeWordThreshold = clamped
+        }
 
     fun routerStats(): RouterStats = RouterStats.from(outcomeStore.recent(200))
 
@@ -158,7 +215,7 @@ class NeonContainer(context: Context) {
         Triple(
             assets.open("wakeword/melspectrogram.onnx").use { it.readBytes() },
             assets.open("wakeword/embedding_model.onnx").use { it.readBytes() },
-            assets.open("wakeword/neon.onnx").use { it.readBytes() },
+            assets.open("wakeword/hey_neon.onnx").use { it.readBytes() },
         )
     }.getOrNull()
 
@@ -186,6 +243,7 @@ class NeonContainer(context: Context) {
                 vad = vad,
                 wakeWord = wakeWord,
                 segmenter = SpeechSegmenter(),
+                wakeWordThreshold = wakeWordThreshold,
             ).also { pipeline = it }
 
             override val orchestrator = this@NeonContainer.orchestrator

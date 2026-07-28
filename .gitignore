@@ -9,10 +9,21 @@ captures/
 .externalNativeBuild/
 .cxx/
 
-# Native Abhängigkeiten und Modellgewichte werden nie eingecheckt.
-core/inference/src/main/cpp/llama.cpp/
+# llama.cpp-Quellen, falls jemand mit scripts/build-llama-server.sh baut.
+.llama.cpp/
+
+# Modellgewichte werden nie eingecheckt.
 *.gguf
 *.onnx
 *.litertlm
 *.bin
+
+# Das gebaute llama-server-Programm ist ausdrücklich Teil des Repositories: Ohne es
+# könnte niemand ohne NDK eine funktionierende APK bauen — und genau das ist das Ziel.
+!app/src/main/jniLibs/arm64-v8a/libllama-server.so
+
+# Trainingsausgaben und eigene Aufnahmen.
+tools/train-wakeword/recordings/
+tools/train-wakeword/.venv/
+
 !gradle/wrapper/gradle-wrapper.jar

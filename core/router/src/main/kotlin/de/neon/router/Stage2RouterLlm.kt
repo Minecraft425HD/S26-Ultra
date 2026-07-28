@@ -53,14 +53,22 @@ object RouterLlmProtocol {
 
     /**
      * GBNF-Grammatik für llama.cpp. Erzwingt gültiges JSON mit genau diesen Feldern —
-     * damit kann auch ein 0.6B-Modell nicht aus der Form fallen.
+     * damit kann auch ein kleines Modell nicht aus der Form fallen.
+     *
+     * **Jede Regel muss in einer Zeile stehen.** Der GBNF-Parser kennt keine Fortsetzung
+     * über Zeilenumbrüche hinweg; eine umgebrochene Regel führt nicht etwa zu einer
+     * Warnung, sondern lässt die gesamte Grammatik scheitern — und der Server antwortet
+     * dann mit einem leeren Ergebnis statt mit einer Fehlermeldung, die auf die Ursache
+     * zeigt.
      */
     val grammar: String = buildString {
-        appendLine("root ::= \"{\" ws \"\\\"kategorie\\\"\" ws \":\" ws kategorie ws \",\"")
-        appendLine("         ws \"\\\"komplexitaet\\\"\" ws \":\" ws komplexitaet ws \",\"")
-        appendLine("         ws \"\\\"braucht_web\\\"\" ws \":\" ws bool ws \",\"")
-        appendLine("         ws \"\\\"braucht_bild\\\"\" ws \":\" ws bool ws \",\"")
-        appendLine("         ws \"\\\"privat\\\"\" ws \":\" ws bool ws \"}\"")
+        append("root ::= \"{\"")
+        append(" ws \"\\\"kategorie\\\"\" ws \":\" ws kategorie ws \",\"")
+        append(" ws \"\\\"komplexitaet\\\"\" ws \":\" ws komplexitaet ws \",\"")
+        append(" ws \"\\\"braucht_web\\\"\" ws \":\" ws bool ws \",\"")
+        append(" ws \"\\\"braucht_bild\\\"\" ws \":\" ws bool ws \",\"")
+        append(" ws \"\\\"privat\\\"\" ws \":\" ws bool ws")
+        appendLine(" \"}\"")
         append("kategorie ::= ")
         appendLine(routableCategories.joinToString(" | ") { "\"\\\"${it.name}\\\"\"" })
         appendLine("komplexitaet ::= [1-5]")

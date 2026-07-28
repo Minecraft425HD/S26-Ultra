@@ -1,6 +1,5 @@
 package de.neon.inference
 
-import de.neon.router.ModelSpec
 import de.neon.router.RouteAnalysis
 import de.neon.router.RouterLlm
 import de.neon.router.RouterLlmProtocol
@@ -9,41 +8,40 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 
 /**
- * Stufe 2 des Routers: das kleine Modell, das nur einsortiert.
+ * Stufe 2 des Routers: einordnen statt antworten.
  *
- * Zwei Eigenheiten machen das brauchbar, obwohl das Modell winzig ist:
+ * Zwei Eigenheiten machen das mit einem kleinen Modell brauchbar:
  *
- *  - Die Ausgabe wird per Grammatik erzwungen. Ein 0.6B-Modell würde sonst regelmäßig
- *    erklären, warum es diese Kategorie gewählt hat, statt einfach JSON auszugeben.
- *  - Es läuft mit Temperatur null. Eine Klassifikation soll bei gleicher Frage immer
- *    dasselbe Ergebnis liefern; Kreativität ist hier ausschließlich schädlich.
+ *  - Die Ausgabe wird per Grammatik erzwungen. Ohne sie würde ein Modell regelmäßig
+ *    erklären, warum es diese Kategorie gewählt hat, statt schlicht JSON auszugeben.
+ *  - Temperatur null. Eine Klassifikation soll bei gleicher Frage immer gleich ausfallen;
+ *    Kreativität ist hier ausschließlich schädlich.
  *
- * Wichtig für die Energiebilanz: Das Router-Modell hat einen **eigenen** Motor. Liefe es
- * über denselben wie die Antwortmodelle, müsste für jede Klassifikation das Alltagsmodell
- * entladen und danach wieder geladen werden — die Einordnung würde teurer als die Antwort.
+ * **Es wird ausdrücklich nie das Modell gewechselt.** llama-server bedient je Lauf genau ein
+ * Modell; für eine Einordnung das geladene Antwortmodell zu entladen und danach wieder
+ * einzulesen würde die Einordnung teurer machen als die Antwort. Läuft nichts, gibt diese
+ * Stufe `null` zurück und der Router entscheidet ohne sie.
+ *
+ * Ein eigenes, dauerhaft geladenes 0.6B-Router-Modell lohnt erst, wenn mehrere
+ * Antwortmodelle im Wechsel laufen — dann als zweiter Serverprozess auf eigenem Port.
  */
 class LocalRouterLlm(
     private val engine: InferenceEngine,
-    private val model: ModelSpec,
-    private val modelFiles: ModelFileResolver,
 ) : RouterLlm {
 
     /**
      * Der Router ruft synchron auf, weil er selbst keine Coroutine ist.
      *
-     * Das ist vertretbar, weil der Aufruf im Dienst ohnehin auf einem Hintergrund-Thread
-     * läuft und einige hundert Millisekunden dauert — dieselbe Größenordnung wie die
-     * Spracherkennung davor.
+     * Vertretbar, weil der Aufruf im Dienst ohnehin auf einem Hintergrund-Thread läuft und
+     * einige hundert Millisekunden dauert — dieselbe Größenordnung wie die Spracherkennung
+     * davor.
      */
     override fun analyze(utterance: Utterance): RouteAnalysis? = runBlocking {
         analyzeSuspending(utterance)
     }
 
     suspend fun analyzeSuspending(utterance: Utterance): RouteAnalysis? {
-        if (engine.loadedModelId != model.id) {
-            val file = modelFiles.fileFor(model) ?: return null
-            if (!engine.load(model, file)) return null
-        }
+        if (engine.loadedModelId == null) return null
 
         val chunks = engine.generate(
             GenerationRequest(

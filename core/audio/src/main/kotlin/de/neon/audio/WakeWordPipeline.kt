@@ -56,13 +56,27 @@ class WakeWordPipeline(
     private val preRoll: PreRollBuffer = PreRollBuffer.forSeconds(2.0),
     /** Ab dieser Wahrscheinlichkeit gilt ein Block als Sprache. */
     private val vadThreshold: Float = 0.5f,
-    /** Ab dieser Wahrscheinlichkeit gilt das Weckwort als gefallen. */
-    private val wakeWordThreshold: Float = 0.7f,
+    /**
+     * Ab dieser Wahrscheinlichkeit gilt das Weckwort als gefallen.
+     *
+     * Zur Laufzeit veränderbar, weil der richtige Wert von der Umgebung abhängt: In einer
+     * stillen Wohnung darf er niedriger stehen als in einem Haushalt mit laufendem
+     * Fernseher. Einen festen Wert zu raten hieße, für die eine Hälfte der Nutzer zu oft
+     * und für die andere zu selten auszulösen.
+     */
+    wakeWordThreshold: Float = DEFAULT_WAKE_WORD_THRESHOLD,
     /** Kommt nach dem Weckwort so lange nichts, geht es zurück ins Lauschen. */
     private val silenceTimeoutFrames: Int = 90,
     /** Harte Obergrenze für eine Äußerung, damit ein Dauerton nicht den Speicher füllt. */
     private val maxCaptureFrames: Int = 900,
 ) {
+
+    /** Kann im Betrieb nachjustiert werden; siehe Diagnose-Screen. */
+    @Volatile
+    var wakeWordThreshold: Float = wakeWordThreshold.coerceIn(MIN_THRESHOLD, MAX_THRESHOLD)
+        set(value) {
+            field = value.coerceIn(MIN_THRESHOLD, MAX_THRESHOLD)
+        }
 
     private enum class State { LAUSCHEN, AUFNAHME }
 
@@ -229,4 +243,15 @@ class WakeWordPipeline(
 
     private fun toFloat(frame: ShortArray, length: Int): FloatArray =
         FloatArray(length) { frame[it] / 32768f }
+
+    companion object {
+        /**
+         * Bewusst hoch angesetzt. Ein Assistent, der zu oft anspringt, wird abgeschaltet;
+         * einer, der gelegentlich überhört wird, bekommt einen zweiten Anlauf.
+         */
+        const val DEFAULT_WAKE_WORD_THRESHOLD = 0.7f
+
+        const val MIN_THRESHOLD = 0.3f
+        const val MAX_THRESHOLD = 0.95f
+    }
 }

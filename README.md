@@ -89,6 +89,34 @@ Der Diagnose-Screen in der App zeigt die Durchlassquoten der Audiostufen und den
 Anfragen, die ganz ohne Sprachmodell beantwortet wurden. Beides sind die Größen, an denen
 sich ablesen lässt, ob Neon tatsächlich sparsam arbeitet — statt es nur zu behaupten.
 
+## Wie die Inferenz läuft
+
+Neon liefert das fertige `llama-server`-Programm mit (13 MB, arm64) und spricht es über HTTP
+auf `localhost` an. Das ist keine Notlösung, sondern löst vier Dinge auf einmal:
+
+- **Kein eigener C++-Code.** Frühere Fassungen hatten eine handgeschriebene JNI-Brücke, die
+  nie kompiliert wurde. llama.cpp ändert seine API regelmäßig; ein gepflegtes Programm zu
+  benutzen ist verlässlicher, als eine Brücke hinterherzupflegen.
+- **GBNF-Grammatik ist dabei.** Sie erzwingt gültiges JSON bei der Einordnung in Stufe 2 und
+  bei Werkzeugaufrufen. Auch ein kleines Modell kann damit nicht aus der Form fallen.
+- **Eigener Prozess.** Ein Modell, das den Speicher sprengt, reißt die Hörschleife nicht mit.
+- **Prüfbar ohne Telefon.** `LlamaServerIntegrationTest` startet einen echten Server mit
+  einem kleinen Modell und prüft Streaming, Grammatik und Abbruch. Genau dieser Test hat zwei
+  Fehler gefunden, die sonst ausgeliefert worden wären: eine über mehrere Zeilen umgebrochene
+  Grammatik (der Server lieferte daraufhin wortlos nichts) und eine JSON-Null, die als
+  Zeichenkette gelesen wurde und jeder gesprochenen Antwort ein „null" vorangestellt hätte.
+
+Je Serverlauf wird genau ein Modell bedient; beim Wechsel startet der Prozess neu. llama.cpp
+kann zwar mehrere Modelle über einen Router-Modus verwalten, schaltet den auf Android aber
+bewusst ab, weil er Kindprozesse braucht. Die Hysterese in der Auswahl-Policy vermeidet
+solche Wechsel ohnehin, wo es geht.
+
+Neu bauen — nur nötig, um llama.cpp zu aktualisieren:
+
+```bash
+ANDROID_NDK=/pfad/zum/ndk ./scripts/build-llama-server.sh
+```
+
 ## Aufbau
 
 ```
@@ -112,7 +140,43 @@ Vorgesehen, aber noch nicht umgesetzt: die Inferenz in einem eigenen Prozess
 Hörschleife mitreißt. Derzeit läuft alles in einem Prozess — der Ladefehler wird zwar
 sauber gemeldet, ein echter Speicherüberlauf würde aber die ganze App treffen.
 
-## Bauen
+## In Betrieb nehmen
+
+Es wird **kein** PC mit Entwicklungsumgebung gebraucht — weder adb noch Gradle noch NDK.
+
+### 1. APK holen
+
+Der GitHub-Ablauf baut bei jedem Push eine installierbare APK. Unter *Actions* die letzte
+Ausführung öffnen, `neon-apk` herunterladen, entpacken, auf dem Telefon antippen.
+Mikrofon und Benachrichtigungen erlauben.
+
+Ab hier funktionieren bereits: der Knopf **„Sprechen"**, die Regelstufe (Timer, Wecker,
+Taschenlampe, App-Start), Spracherkennung und Sprachausgabe.
+
+### 2. Sprachmodell übernehmen
+
+Qwen3 4B Instruct als GGUF herunterladen (Q4_K_M, rund 2,5 GB), per USB auf das Telefon
+kopieren, dann in Neon unter *Diagnose → Modelle* auf **Importieren** tippen und die Datei
+auswählen. Neon prüft die Kennbytes und lehnt versehentlich heruntergeladene Fehlerseiten ab.
+
+Danach beantwortet Neon echte Fragen.
+
+### 3. Weckwort trainieren
+
+```bash
+./scripts/fetch-models.sh          # VAD und die gemeinsamen openWakeWord-Stufen
+cd tools/train-wakeword && pip install -r requirements.txt && python train.py
+cp hey_neon.onnx ../../app/src/main/assets/wakeword/
+```
+
+Rund 30 Minuten auf einer NVIDIA-Karte. Danach hört Neon freihändig auf **„Hey Neon"**.
+Details in `tools/train-wakeword/README.md` — besonders der Abschnitt über eigene
+Aufnahmen lohnt sich.
+
+Springt das Weckwort zu oft oder zu selten an: erst den Regler im Diagnose-Screen
+verschieben, nicht neu trainieren.
+
+## Selbst bauen
 
 ```bash
 ./gradlew :app:assembleDebug          # APK
@@ -120,34 +184,16 @@ sauber gemeldet, ein echter Speicherüberlauf würde aber die ganze App treffen.
 ./gradlew :core:router:test           # nur die Router-Logik, ohne Android-SDK
 ```
 
-Ein Android-SDK mit API 36 wird gebraucht (`local.properties` mit `sdk.dir=…`), ein NDK nur
-für den nativen Teil.
+Ein Android-SDK mit API 36 wird gebraucht (`local.properties` mit `sdk.dir=…`). Ein NDK nur,
+wenn `llama-server` neu gebaut werden soll.
 
-### Modelle besorgen
-
-```bash
-./scripts/fetch-models.sh wakeword    # Weckwort- und VAD-Modelle, wenige MB
-./scripts/fetch-models.sh llm         # Anleitung für die Sprachmodelle
-```
-
-Das Weckwortmodell für „Neon" muss selbst trainiert werden — dafür gibt es niemanden, der
-es vorher gebaut hätte. `fetch-models.sh` erklärt den Weg über openWakeWord. **Empfehlung:**
-zusätzlich „Hey Neon" trainieren. Zwei Silben allein lösen erfahrungsgemäß häufiger falsch
-aus, und „Neonlicht" oder „Neonfarbe" gehören unbedingt als Gegenbeispiele ins Training.
-
-Fehlt das Weckwortmodell, bleibt Neon voll bedienbar: Der Knopf **„Sprechen"** startet die
-Aufnahme direkt und nimmt den Dienst mit hoch, falls er noch nicht läuft. Was dann fehlt,
-ist ausschließlich das freihändige Ansprechen.
-
-### Lokale Inferenz
+Der Integrationstest gegen einen echten llama-server überspringt sich selbst, wenn Server
+oder Testmodell fehlen, und sagt das ausdrücklich in der Ausgabe. Mit beidem:
 
 ```bash
-./scripts/fetch-native-deps.sh
-./gradlew :app:assembleDebug -Pneon.buildNative=true
+NEON_TEST_SERVER=/pfad/zu/llama-server NEON_TEST_MODEL=/pfad/zu/klein.gguf \
+  ./gradlew :core:inference:testDebugUnitTest
 ```
-
-Ohne diesen Schritt baut die App normal; nur die Antwortgenerierung meldet dann, dass die
-native Bibliothek fehlt.
 
 ## Warum es keinen Autostart nach dem Neustart gibt
 
@@ -159,29 +205,28 @@ offen, ist für eine sideloadbare App also keine Option.
 
 ## Stand
 
-### Was nach dem Installieren sofort funktioniert
+### Nach dem Installieren sofort
 
-Ohne Download, ohne Training, ohne NDK:
+Ohne Download, ohne Training: „Sprechen" drücken und reden. Die Regelstufe führt Timer,
+Wecker, Taschenlampe und App-Start aus, der Router ordnet ein und begründet seine Wahl im
+Diagnose-Screen, Neon antwortet gesprochen.
 
-- **„Sprechen" drücken und reden.** Aufnahme, Sprachendpunkt-Erkennung, Spracherkennung
-  über Androids lokalen Erkenner, Sprachausgabe.
-- **Die Regelstufe.** „Timer fünf Minuten", „Wecker auf halb sieben", „Taschenlampe an",
-  „öffne Spotify", „wie spät ist es" — beantwortet und ausgeführt, ganz ohne Sprachmodell.
-- **Der Router.** Ordnet ein, wählt ein Modell und begründet die Wahl im Diagnose-Screen.
-- **Der Diagnose-Screen.** Durchlassquoten der Audiostufen, Anteil der Anfragen ohne
-  Sprachmodell, Latenzen je Modell.
+### Nach Schritt 2 und 3
 
-### Was noch nicht funktioniert
+Echte Antworten vom Sprachmodell, freihändiges Ansprechen mit „Hey Neon".
 
-- **Freihändiges Ansprechen.** Braucht ein trainiertes Weckwortmodell für „Neon" — das kann
-  niemand vorher gebaut haben. Bis dahin: Knopf statt Zuruf.
-- **Antworten auf echte Fragen.** Braucht die llama.cpp-Bibliothek *und* die GGUF-Dateien.
-  Fehlt eines von beidem, sagt Neon das ausdrücklich, statt stumm zu bleiben.
-- **Dauerhafte Erinnerungen.** Die Room-Tabellen stehen, angeschlossen ist bisher nur der
-  Sitzungsspeicher.
-- **Prozesstrennung, NPU-Pfad, Messung auf dem Gerät.**
+### Was weiterhin offen ist
 
-**257 Unit-Tests**, `:app:assembleDebug` baut.
+- **Messung auf dem Gerät.** Wie schnell Qwen3 4B auf dem Snapdragon 8 Elite Gen 5 wirklich
+  ist und was der Dauerlauscher kostet, steht noch aus. Bis dahin sind alle Zahlen zu
+  Geschwindigkeit und Akku in diesem Projekt begründete Schätzungen.
+- **Echte Einbettungen.** Stufe 1 arbeitet lexikalisch. llama-server bringt einen
+  `/embedding`-Endpunkt mit; sobald ein Einbettungsmodell dazukommt, ist der Wechsel eine
+  Zeile.
+- **NPU-Pfad.** llama.cpp läuft auf CPU und GPU. Der Qualcomm-Beschleuniger bliebe ein
+  weiterer Sprung bei der Akkulaufzeit.
+
+**308 Unit-Tests**, `:app:assembleDebug` baut, `llama-server` für arm64 ist geprüft.
 
 Die JNI-Brücke unter `core/inference/src/main/cpp/` ist die einzige Datei im Projekt, die
 noch nie kompiliert wurde — sie braucht NDK und llama.cpp-Quellen, die beide nicht im

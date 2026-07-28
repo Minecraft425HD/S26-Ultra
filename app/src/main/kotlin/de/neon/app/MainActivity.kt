@@ -2,6 +2,7 @@ package de.neon.app
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -21,12 +22,14 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -34,13 +37,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import de.neon.audio.CascadeStats
+import de.neon.audio.WakeWordPipeline
+import de.neon.inference.ModelStore
 import de.neon.router.ModelSpec
 import de.neon.router.RouterStats
 import de.neon.service.NeonForegroundService
 import de.neon.service.NeonState
 import de.neon.service.TurnReport
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -48,6 +58,63 @@ class MainActivity : ComponentActivity() {
 
     /** Was nach der Berechtigungsabfrage passieren soll. */
     private var pendingAction: (() -> Unit)? = null
+
+    /** In welchen Modellplatz die gleich ausgewählte Datei gehört. */
+    private var pendingImportModelId: String? = null
+
+    private val importState = MutableStateFlow<ImportState>(ImportState.Idle)
+
+    /**
+     * Der Weg, wie das Modell ohne Entwicklerwerkzeuge auf das Gerät kommt.
+     *
+     * Die Datei wird per USB in den Download-Ordner kopiert und hier ausgewählt. Kein adb,
+     * keine Entwicklereinstellungen, kein Downloader, der bei 2,5 GB über WLAN abbricht.
+     */
+    private val pickModelFile = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        val modelId = pendingImportModelId
+        pendingImportModelId = null
+        if (uri == null || modelId == null) {
+            importState.value = ImportState.Idle
+            return@registerForActivityResult
+        }
+        importModel(modelId, uri)
+    }
+
+    private fun importModel(modelId: String, uri: Uri) {
+        lifecycleScope.launch {
+            importState.value = ImportState.Running(modelId, 0)
+            val result = withContext(Dispatchers.IO) {
+                val expected = contentResolver.openAssetFileDescriptor(uri, "r")
+                    ?.use { it.length }
+                    ?.takeIf { it > 0 }
+                    ?: 0L
+
+                val stream = contentResolver.openInputStream(uri)
+                    ?: return@withContext ModelStore.ImportResult.Failed(
+                        "Die Datei ließ sich nicht öffnen."
+                    )
+
+                container.modelStore.importFrom(
+                    modelId = modelId,
+                    source = stream,
+                    expectedBytes = expected,
+                    onProgress = { copied ->
+                        importState.value = ImportState.Running(modelId, copied)
+                    },
+                )
+            }
+
+            importState.value = when (result) {
+                is ModelStore.ImportResult.Ok ->
+                    ImportState.Done("${gigabytes(result.bytes)} übernommen.")
+
+                is ModelStore.ImportResult.Failed ->
+                    ImportState.Done("Fehlgeschlagen: ${result.reason}")
+            }
+        }
+    }
 
     private val requestPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -72,6 +139,17 @@ class MainActivity : ComponentActivity() {
                         models = container.registry.generativeModels(),
                         isModelAvailable = { container.modelStore.isAvailable(it) },
                         wakeWordAvailable = container.wakeWordAvailable,
+                        inferenceAvailable = container.inferenceAvailable,
+                        importState = importState.collectAsState().value,
+                        wakeWordThreshold = container.wakeWordThreshold,
+                        onWakeWordThreshold = { container.wakeWordThreshold = it },
+                        onImportModel = { modelId ->
+                            pendingImportModelId = modelId
+                            importState.value = ImportState.Running(modelId, 0)
+                            // GGUF hat keinen eigenen MIME-Typ; deshalb alles anbieten und
+                            // die Datei danach an ihren Kennbytes prüfen.
+                            pickModelFile.launch(arrayOf("*/*"))
+                        },
                         readDiagnostics = {
                             Diagnostics(
                                 cascade = container.cascadeStats,
@@ -115,6 +193,13 @@ class MainActivity : ComponentActivity() {
         ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 }
 
+/** Wo der Modell-Import gerade steht. */
+sealed interface ImportState {
+    data object Idle : ImportState
+    data class Running(val modelId: String, val copiedBytes: Long) : ImportState
+    data class Done(val message: String) : ImportState
+}
+
 /** Momentaufnahme der Kennzahlen für den Diagnose-Screen. */
 private data class Diagnostics(
     val cascade: CascadeStats?,
@@ -130,7 +215,12 @@ private fun NeonScreen(
     models: List<ModelSpec>,
     isModelAvailable: (ModelSpec) -> Boolean,
     wakeWordAvailable: Boolean,
+    inferenceAvailable: Boolean,
+    importState: ImportState,
     readDiagnostics: () -> Diagnostics,
+    wakeWordThreshold: Float,
+    onWakeWordThreshold: (Float) -> Unit,
+    onImportModel: (String) -> Unit,
     onSpeak: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
@@ -159,6 +249,21 @@ private fun NeonScreen(
         ) {
             Text("Neon", style = MaterialTheme.typography.headlineMedium)
             Text(describe(state), style = MaterialTheme.typography.bodyLarge)
+
+            if (!inferenceAvailable) {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("Inferenz nicht verfügbar", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Der mitgelieferte llama-server fehlt in dieser Installation. " +
+                                "Regelbefehle, Spracherkennung und Sprachausgabe " +
+                                "funktionieren, echte Fragen beantwortet Neon nicht.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+            }
 
             if (!wakeWordAvailable) {
                 Card(modifier = Modifier.fillMaxWidth()) {
@@ -225,13 +330,46 @@ private fun NeonScreen(
 
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
-                        Text("Modelle", style = MaterialTheme.typography.titleMedium)
+                        Text("Weckwort-Empfindlichkeit", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Springt Neon zu oft an, Regler nach rechts. Hört er dich " +
+                                "nicht, nach links. Das wirkt sofort — dafür muss nichts " +
+                                "neu trainiert werden.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                         Spacer(Modifier.height(8.dp))
+
+                        var value by remember(wakeWordThreshold) {
+                            mutableFloatStateOf(wakeWordThreshold)
+                        }
+                        Slider(
+                            value = value,
+                            onValueChange = { value = it },
+                            onValueChangeFinished = { onWakeWordThreshold(value) },
+                            valueRange = WakeWordPipeline.MIN_THRESHOLD..WakeWordPipeline.MAX_THRESHOLD,
+                        )
+                        Text(
+                            "Schwellwert: %.2f".format(value),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("Modelle", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Datei per USB auf das Telefon kopieren, dann hier auswählen.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(Modifier.height(12.dp))
+
                         models.forEach { model ->
                             val available = isModelAvailable(model)
                             Text(
-                                "${model.displayName} — ${gigabytes(model.sizeBytes)} — " +
-                                    if (available) "vorhanden" else "fehlt",
+                                "${model.displayName} — ${gigabytes(model.sizeBytes)}",
                                 style = MaterialTheme.typography.bodyMedium,
                             )
                             Text(
@@ -239,7 +377,28 @@ private fun NeonScreen(
                                     "Komplexität ${model.minComplexity}–${model.maxComplexity}",
                                 style = MaterialTheme.typography.bodySmall,
                             )
-                            Spacer(Modifier.height(8.dp))
+
+                            val running = importState as? ImportState.Running
+                            when {
+                                available -> Text(
+                                    "vorhanden",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+
+                                running?.modelId == model.id -> Text(
+                                    "wird übernommen — ${gigabytes(running.copiedBytes)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+
+                                else -> OutlinedButton(onClick = { onImportModel(model.id) }) {
+                                    Text("Importieren")
+                                }
+                            }
+                            Spacer(Modifier.height(12.dp))
+                        }
+
+                        (importState as? ImportState.Done)?.let {
+                            Text(it.message, style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                 }

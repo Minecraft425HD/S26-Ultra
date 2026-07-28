@@ -107,6 +107,21 @@ class ToolRegistryTest {
     }
 
     @Test
+    fun `jede Grammatikregel steht in genau einer Zeile`() {
+        // Siehe RouterLlmProtocolTest: Eine über mehrere Zeilen umgebrochene GBNF-Regel
+        // lässt die gesamte Grammatik scheitern, ohne dass der Fehler erkennbar wäre.
+        registry().grammar()
+            .lines()
+            .filter { it.isNotBlank() }
+            .forEach { line ->
+                assertTrue(
+                    line.contains("::="),
+                    "Zeile ohne Regelkopf — vermutlich eine umgebrochene Regel: \"$line\"",
+                )
+            }
+    }
+
+    @Test
     fun `die Werkzeugbeschreibung nennt Namen und Parameter`() {
         val description = registry().promptDescription()
         assertTrue(description.contains("timer"))

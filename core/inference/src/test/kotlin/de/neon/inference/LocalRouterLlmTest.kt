@@ -1,8 +1,6 @@
 package de.neon.inference
 
 import de.neon.router.AnalysisSource
-import de.neon.router.Capability
-import de.neon.router.ModelRole
 import de.neon.router.ModelSpec
 import de.neon.router.TaskCategory
 import de.neon.router.Utterance
@@ -18,61 +16,49 @@ import kotlin.test.assertTrue
 
 class LocalRouterLlmTest {
 
-    private val routerModel = ModelSpec(
-        id = "qwen3-0.6b-router",
-        displayName = "Router",
-        role = ModelRole.ROUTER,
-        sizeBytes = 400L * 1024 * 1024,
-        capabilities = setOf(Capability.TEXT),
-        tokensPerSecond = 90.0,
-        loadCostMillis = 300,
-        energyPerToken = 0.15,
-    )
-
     private class ScriptedEngine(
         private val output: String,
         private val fails: Boolean = false,
-        private val loadSucceeds: Boolean = true,
+        loaded: String? = "qwen3-4b-instruct",
     ) : InferenceEngine {
-        override var loadedModelId: String? = null
+
+        override var loadedModelId: String? = loaded
             private set
 
         var lastRequest: GenerationRequest? = null
         var loadCount = 0
+        var unloadCount = 0
 
         override suspend fun load(model: ModelSpec, file: File): Boolean {
             loadCount++
-            if (!loadSucceeds) return false
             loadedModelId = model.id
             return true
         }
 
         override suspend fun unload() {
+            unloadCount++
             loadedModelId = null
         }
 
         override fun generate(request: GenerationRequest): Flow<GenerationChunk> = flow {
             lastRequest = request
             if (fails) {
-                emit(GenerationChunk.Failed("kein Modell"))
+                emit(GenerationChunk.Failed("Server nicht erreichbar"))
                 return@flow
             }
-            // Token für Token, wie es das echte Modell auch täte.
+            // Token für Token, wie es der echte Server auch liefert.
             output.chunked(7).forEach { emit(GenerationChunk.Token(it)) }
             emit(GenerationChunk.Done(output.length, 90.0))
         }
     }
 
-    private val resolver = ModelFileResolver { File("/dev/null") }
+    private val validJson =
+        """{"kategorie":"CODE","komplexitaet":4,"braucht_web":false,"braucht_bild":false,"privat":false}"""
 
     @Test
     fun `liest die Kategorie aus der Modellantwort`() = runTest {
-        val engine = ScriptedEngine(
-            """{"kategorie":"CODE","komplexitaet":4,"braucht_web":false,"braucht_bild":false,"privat":false}"""
-        )
-        val router = LocalRouterLlm(engine, routerModel, resolver)
-
-        val analysis = router.analyzeSuspending(Utterance("schreib mir eine funktion"))
+        val engine = ScriptedEngine(validJson)
+        val analysis = LocalRouterLlm(engine).analyzeSuspending(Utterance("schreib mir eine funktion"))
 
         assertNotNull(analysis)
         assertEquals(TaskCategory.CODE, analysis.category)
@@ -82,10 +68,8 @@ class LocalRouterLlmTest {
 
     @Test
     fun `erzwingt die Grammatik und schaltet die Kreativitaet ab`() = runTest {
-        val engine = ScriptedEngine(
-            """{"kategorie":"SMALLTALK","komplexitaet":1,"braucht_web":false,"braucht_bild":false,"privat":false}"""
-        )
-        LocalRouterLlm(engine, routerModel, resolver).analyzeSuspending(Utterance("hallo"))
+        val engine = ScriptedEngine(validJson)
+        LocalRouterLlm(engine).analyzeSuspending(Utterance("hallo"))
 
         val request = assertNotNull(engine.lastRequest)
         // Ohne Grammatik erklärt ein kleines Modell gern seine Wahl, statt JSON zu liefern.
@@ -96,61 +80,42 @@ class LocalRouterLlmTest {
     }
 
     @Test
-    fun `laedt das Router-Modell nur einmal`() = runTest {
-        val engine = ScriptedEngine(
-            """{"kategorie":"SMALLTALK","komplexitaet":1,"braucht_web":false,"braucht_bild":false,"privat":false}"""
-        )
-        val router = LocalRouterLlm(engine, routerModel, resolver)
+    fun `wechselt niemals das Modell`() = runTest {
+        // Der wichtigste Test dieser Klasse. llama-server bedient je Lauf genau ein Modell;
+        // für eine Einordnung das Antwortmodell zu tauschen würde die Einordnung teurer
+        // machen als die Antwort selbst.
+        val engine = ScriptedEngine(validJson)
+        LocalRouterLlm(engine).analyzeSuspending(Utterance("hallo"))
 
-        router.analyzeSuspending(Utterance("hallo"))
-        router.analyzeSuspending(Utterance("guten tag"))
-
-        assertEquals(1, engine.loadCount)
+        assertEquals(0, engine.loadCount)
+        assertEquals(0, engine.unloadCount)
+        assertEquals("qwen3-4b-instruct", engine.loadedModelId)
     }
 
     @Test
-    fun `gibt null zurueck wenn das Modell nicht da ist`() = runTest {
-        val router = LocalRouterLlm(
-            ScriptedEngine("egal"),
-            routerModel,
-            ModelFileResolver { null },
-        )
-        assertNull(router.analyzeSuspending(Utterance("hallo")))
-    }
-
-    @Test
-    fun `gibt null zurueck wenn das Laden scheitert`() = runTest {
-        val router = LocalRouterLlm(
-            ScriptedEngine("egal", loadSucceeds = false),
-            routerModel,
-            resolver,
-        )
-        assertNull(router.analyzeSuspending(Utterance("hallo")))
+    fun `haelt sich zurueck wenn kein Modell laeuft`() = runTest {
+        val engine = ScriptedEngine(validJson, loaded = null)
+        assertNull(LocalRouterLlm(engine).analyzeSuspending(Utterance("hallo")))
+        // Es darf auch nicht versucht werden, dafür eines zu laden.
+        assertEquals(0, engine.loadCount)
     }
 
     @Test
     fun `gibt null zurueck wenn die Inferenz scheitert`() = runTest {
-        val router = LocalRouterLlm(ScriptedEngine("", fails = true), routerModel, resolver)
-        assertNull(router.analyzeSuspending(Utterance("hallo")))
+        val engine = ScriptedEngine("", fails = true)
+        assertNull(LocalRouterLlm(engine).analyzeSuspending(Utterance("hallo")))
     }
 
     @Test
     fun `gibt null zurueck bei unbrauchbarer Ausgabe`() = runTest {
-        // Ohne Grammatikunterstützung in der Laufzeit kann so etwas herauskommen.
-        val router = LocalRouterLlm(
-            ScriptedEngine("Das ist eine interessante Frage!"),
-            routerModel,
-            resolver,
-        )
-        assertNull(router.analyzeSuspending(Utterance("hallo")))
+        val engine = ScriptedEngine("Das ist eine interessante Frage!")
+        assertNull(LocalRouterLlm(engine).analyzeSuspending(Utterance("hallo")))
     }
 
     @Test
     fun `begrenzt die Ausgabelaenge`() = runTest {
-        val engine = ScriptedEngine(
-            """{"kategorie":"SMALLTALK","komplexitaet":1,"braucht_web":false,"braucht_bild":false,"privat":false}"""
-        )
-        LocalRouterLlm(engine, routerModel, resolver).analyzeSuspending(Utterance("hallo"))
+        val engine = ScriptedEngine(validJson)
+        LocalRouterLlm(engine).analyzeSuspending(Utterance("hallo"))
 
         // Ein Modell, das die Grammatik ignoriert, darf nicht endlos weiterreden.
         assertTrue(assertNotNull(engine.lastRequest).maxTokens <= 128)

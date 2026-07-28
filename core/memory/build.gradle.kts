@@ -25,7 +25,8 @@ dependencies {
     api(project(":core:router"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
-    implementation(libs.androidx.room.runtime)
+    // api, weil NeonDatabase von RoomDatabase erbt und im App-Modul benutzt wird.
+    api(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
 

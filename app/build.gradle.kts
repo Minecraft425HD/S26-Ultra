@@ -44,6 +44,13 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+
+        jniLibs {
+            // llama-server ist ein Programm, keine Bibliothek. Es muss beim Installieren
+            // ausgepackt werden, damit es aus einem ausführbaren Verzeichnis gestartet
+            // werden kann — komprimiert in der APK ließe es sich nicht ausführen.
+            useLegacyPackaging = true
+        }
     }
 }
 
