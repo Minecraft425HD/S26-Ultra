@@ -256,6 +256,10 @@ private fun Blase(entry: ChatEntry) {
                 buildString {
                     append(entry.modelId ?: "ohne Modell")
                     if (entry.latencyMs > 0) append(" · ${entry.latencyMs} ms")
+                    // Token je Sekunde. Die eine Zahl, an der sich ablesen lässt, ob eine
+                    // Änderung am Unterbau etwas gebracht hat — vorher musste man dafür
+                    // das Protokoll teilen und die Zeilen von llama-server suchen.
+                    tempo(entry.tokenCount, entry.latencyMs)?.let { append(" · $it") }
                     entry.routeReason?.let { append(" · $it") }
                 },
                 style = MaterialTheme.typography.labelSmall,
@@ -263,6 +267,28 @@ private fun Blase(entry: ChatEntry) {
             )
         }
     }
+}
+
+/**
+ * Token je Sekunde als kurzer Text — `null`, wenn sich nichts Sinnvolles ausrechnen lässt.
+ *
+ * Die Latenz enthält auch das Laden des Modells; beim ersten Durchgang steht deshalb eine
+ * zu kleine Zahl. Das ist hinnehmbar: Verglichen wird ohnehin über mehrere Antworten, und
+ * eine leicht zu pessimistische Angabe ist besser als gar keine.
+ */
+internal fun tempo(tokens: Int, latencyMs: Long): String? {
+    if (tokens <= 0 || latencyMs <= 0) return null
+    val proSekunde = tokens * 1000.0 / latencyMs
+    // Unter zehn ist die Nachkommastelle die Auskunft — 0,7 gegen 4,2 ist der ganze
+    // Unterschied zwischen unbenutzbar und zäh. Darüber wäre sie nur Rauschen.
+    // Fest auf Deutsch: Die ganze Oberfläche ist deutsch, und ohne Angabe hinge das
+    // Dezimalzeichen an der Spracheinstellung des Telefons.
+    val zahl = if (proSekunde < 10) {
+        String.format(java.util.Locale.GERMANY, "%.1f", proSekunde)
+    } else {
+        proSekunde.toInt().toString()
+    }
+    return "$zahl T/s"
 }
 
 /**

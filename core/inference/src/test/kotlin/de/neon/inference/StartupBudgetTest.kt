@@ -78,4 +78,20 @@ class StartupBudgetTest {
             budget(4 * gb),
         )
     }
+
+    @Test
+    fun `die Zahl der Rechenfaeden kommt vom Geraet`() {
+        val faeden = ProcessServerSupervisor.defaultThreads()
+
+        // Hier stand fest verdrahtet 8 — eine Zahl aus einem Datenblatt, die nie geprüft
+        // wurde. Mehr Fäden als Kerne machen es langsamer, nicht schneller, weil die Fäden
+        // einander vom Kern verdrängen.
+        assertTrue(
+            faeden <= Runtime.getRuntime().availableProcessors().coerceAtLeast(
+                ProcessServerSupervisor.MIN_THREADS
+            ),
+            "$faeden Fäden bei ${Runtime.getRuntime().availableProcessors()} Kernen",
+        )
+        assertTrue(faeden in ProcessServerSupervisor.MIN_THREADS..ProcessServerSupervisor.MAX_THREADS)
+    }
 }

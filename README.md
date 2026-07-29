@@ -272,17 +272,26 @@ Echte Antworten vom Sprachmodell, freihändiges Ansprechen mit „Hey Neon".
 
 ### Was weiterhin offen ist
 
-- **Messung auf dem Gerät.** Wie schnell Qwen3 4B auf dem Snapdragon 8 Elite Gen 5 wirklich
-  ist und was der Dauerlauscher kostet, steht noch aus. Bis dahin sind alle Zahlen zu
-  Geschwindigkeit und Akku in diesem Projekt begründete Schätzungen.
+- **Messung auf dem Gerät.** Erste echte Zahlen liegen vor, und sie waren ernüchternd:
+  **0,71 Token je Sekunde** beim Erzeugen, 4,17 beim Verarbeiten. Die Ursache ließ sich an
+  der ausgelieferten Datei nachweisen — sie enthielt keinen einzigen `sdot`-Befehl, weil
+  `GGML_CPU_ARM_ARCH` im Bauskript fehlte und llama.cpp deshalb für `armv8-a` übersetzte,
+  den Grundbefehlssatz von 2011. Mit `armv8.2-a+dotprod+fp16` sind es jetzt 898 solcher
+  Befehle. **Wie viel das auf dem Gerät bringt, ist noch nicht gemessen**; bis dahin
+  bleiben die Zahlen zu Geschwindigkeit und Akku begründete Schätzungen.
+- **`i8mm`.** Der nächste Schritt beim Verarbeiten langer Prompts, bewusst noch nicht
+  aktiviert: Kerne ohne diesen Befehl beenden das Programm sofort. Neon protokolliert jetzt
+  die Merkmalszeile aus `/proc/cpuinfo` — daran, nicht an einer Vermutung über das Gerät,
+  entscheidet sich das.
 - **Echte Einbettungen.** Stufe 1 arbeitet lexikalisch. llama-server bringt einen
   `/embedding`-Endpunkt mit; sobald ein Einbettungsmodell dazukommt, ist der Wechsel eine
   Zeile.
 - **NPU-Pfad.** llama.cpp läuft auf CPU und GPU. Der Qualcomm-Beschleuniger bliebe ein
   weiterer Sprung bei der Akkulaufzeit.
 
-**439 Unit-Tests**, `:app:assembleRelease` baut, `llama-server` für arm64 ist gebaut,
-ausgerichtet und gegen ein echtes Modell erprobt.
+**503 Testläufe**, `:app:assembleRelease` baut, `llama-server` für arm64 ist gebaut,
+16-KB-ausgerichtet, mit Skalarprodukt-Befehlen übersetzt und gegen ein echtes Modell
+erprobt.
 
 ### Was die Tests hier grundsätzlich nicht sehen
 

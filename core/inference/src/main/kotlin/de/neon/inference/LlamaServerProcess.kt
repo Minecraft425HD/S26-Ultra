@@ -65,7 +65,7 @@ class ProcessServerSupervisor(
     private val context: Context,
     private val port: Int = DEFAULT_PORT,
     contextSize: Int = DEFAULT_CONTEXT_SIZE,
-    private val threads: Int = DEFAULT_THREADS,
+    private val threads: Int = defaultThreads(),
 ) : ServerSupervisor {
 
     /**
@@ -134,6 +134,12 @@ class ProcessServerSupervisor(
         }
 
         stopping.set(false)
+
+        // Einmal je Serverstart: was der Prozessor kann. Zusammen mit der `system_info`-
+        // Zeile, die llama-server gleich danach schreibt, ergibt das den Vergleich, auf den
+        // es ankommt — was das Gerät könnte gegen das, was die Binärdatei benutzt.
+        NeonLog.i(TAG, CpuFeatures.describe())
+
         val started = runCatching { launch(file, projector) }.getOrElse {
             NeonLog.e(TAG, "llama-server ließ sich nicht starten", it)
             return null
@@ -380,11 +386,24 @@ class ProcessServerSupervisor(
         const val KV_BYTES_PER_TOKEN = 73_728L
 
         /**
-         * Acht Threads. Der Snapdragon 8 Elite Gen 5 hat mehr Kerne, aber über den großen
-         * bringt llama.cpp kaum noch Durchsatz und heizt vor allem. Der endgültige Wert
-         * kommt aus der Messung auf dem Gerät.
+         * Wie viele Rechenfäden llama-server bekommt.
+         *
+         * Hier stand fest verdrahtet `8` — eine Zahl, die aus dem Datenblatt eines
+         * bestimmten Prozessors stammte und nie geprüft wurde. Mehr Fäden als verfügbare
+         * Kerne machen es messbar langsamer statt schneller, weil die Fäden einander vom
+         * Kern verdrängen; und wie viele Kerne Android der App zugesteht, weiß nur das
+         * Gerät.
+         *
+         * [Runtime.availableProcessors] meldet unter Android die Kerne, die dem Prozess
+         * gerade zustehen. Nach oben begrenzt, weil llama.cpp über acht Fäden kaum noch
+         * Durchsatz gewinnt und vor allem heizt — und Wärme kostet auf einem Telefon
+         * innerhalb einer Minute mehr, als die Fäden einbringen.
          */
-        const val DEFAULT_THREADS = 8
+        fun defaultThreads(): Int =
+            Runtime.getRuntime().availableProcessors().coerceIn(MIN_THREADS, MAX_THREADS)
+
+        const val MIN_THREADS = 4
+        const val MAX_THREADS = 8
 
         private const val MB = 1024L * 1024
         private const val GB = 1024L * MB
@@ -445,6 +464,18 @@ class ProcessServerSupervisor(
             "n_ctx",
             "kv cache",
             "kv self",
+
+            // Ab hier die Zeilen, die über die Geschwindigkeit Auskunft geben. Sie fehlten,
+            // als sich herausstellte, dass Neon mit 0,71 Token je Sekunde antwortete: Die
+            // Zahlen standen zwar in der Ausgabe des Servers, aber nicht in der Datei, die
+            // man weitergeben kann.
+            //
+            // `system_info` nennt die Rechenbefehle, die die Binärdatei benutzt — genau
+            // die Auskunft, an der sich die Ursache ablesen ließ.
+            "system_info",
+            // `print_timing` bringt Token je Sekunde für jede einzelne Antwort mit.
+            "print_timing",
+            "n_threads",
         )
 
         /** Die Frist für ein Modell dieser Größe. */

@@ -46,11 +46,37 @@ log "für arm64-v8a konfigurieren"
 # nicht starten. NDK r27 richtet nur auf Zuruf auf 16 KB aus, erst r28 tut es von selbst.
 # Die Linker-Flags stehen zusätzlich da, damit die Ausrichtung auch dann erhalten bleibt,
 # wenn das Projekt später auf ein neueres NDK oder einen anderen Bauweg wechselt.
+#
+# GGML_CPU_ARM_ARCH ist der dritte entscheidende Schalter — und der, dessen Fehlen am
+# längsten unbemerkt blieb. Ohne ihn übersetzt llama.cpp für `armv8-a`, den
+# Grundbefehlssatz von 2011:
+#
+#     if (GGML_CPU_ARM_ARCH)
+#         list(APPEND ARCH_FLAGS -march=${GGML_CPU_ARM_ARCH})
+#     elseif(GGML_CPU_ALL_VARIANTS)
+#         set(ARM_MCPU "armv8-a")
+#
+# GGML_NATIVE hilft hier nicht: Beim Übersetzen für ein anderes Gerät überspringt CMake
+# die Erkennung der eigenen Maschine, und das ist auch richtig so — sonst stünden die
+# Merkmale des Bau-Rechners in einer Datei fürs Telefon.
+#
+# Die Folge war messbar: In der ausgelieferten Datei stand kein einziger `sdot`-Befehl.
+# llama.cpp rechnete die 4-Bit-Gewichte in Schleifen aus Einzelmultiplikationen aus, und
+# auf dem Gerät kamen 0,71 Token je Sekunde heraus statt der erwarteten 15 bis 25.
+#
+# `dotprod` (ARMv8.2) und `fp16` gibt es auf praktisch jedem arm64-Telefon seit 2018.
+# Bewusst **ohne** `+i8mm`: Das brächte beim Verarbeiten langer Prompts noch einmal etwas,
+# aber ein Kern ohne diesen Befehl beendet das Programm sofort mit SIGILL. Dann wäre Neon
+# nicht langsam, sondern gar nicht da. Ob i8mm dazukommt, entscheidet die Merkmalszeile
+# aus /proc/cpuinfo, die Neon jetzt protokolliert — nicht eine Vermutung über das Gerät.
+ARM_ARCH="${GGML_CPU_ARM_ARCH:-armv8.2-a+dotprod+fp16}"
+
 cmake -B "$WORK/build-arm64" -G Ninja -S "$WORK" \
     -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK/build/cmake/android.toolchain.cmake" \
     -DANDROID_ABI=arm64-v8a \
     -DANDROID_PLATFORM=android-33 \
     -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON \
+    -DGGML_CPU_ARM_ARCH="$ARM_ARCH" \
     -DCMAKE_EXE_LINKER_FLAGS="-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384" \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_SHARED_LIBS=OFF \
@@ -89,6 +115,28 @@ if (( WORST < 16384 )); then
     die "LOAD-Segmente nur auf $WORST Byte ausgerichtet. Auf einem Gerät mit 16-KB-Seiten
      lässt sich das Programm nicht starten. Bauverzeichnis $WORK/build-arm64 löschen und
      neu konfigurieren — der Schalter wirkt nur beim Konfigurieren, nicht beim Bauen."
+fi
+
+# Genauso nachmessen statt hoffen: Ob die Beschleunigungsbefehle wirklich drin sind.
+#
+# Eine Datei, die für armv8-a übersetzt wurde, ist von einer richtig übersetzten äußerlich
+# nicht zu unterscheiden — gleiche Größe, gleicher Aufbau, startet einwandfrei. Sie fällt
+# erst auf dem Telefon auf, und dort nur als "Neon braucht zwei Minuten für einen Satz".
+# Genau so ist es passiert.
+log "Befehlssatz prüfen"
+OBJDUMP="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump"
+[[ -x "$OBJDUMP" ]] || OBJDUMP="$(command -v llvm-objdump || true)"
+if [[ -n "$OBJDUMP" ]]; then
+    SDOT=$("$OBJDUMP" -d --no-show-raw-insn "$TARGET" 2>/dev/null \
+        | grep -cE '[[:space:]](sdot|udot)[[:space:]]' || true)
+    (( SDOT > 0 )) || die "kein einziger sdot-Befehl in $TARGET.
+     Damit rechnet llama.cpp quantisierte Matrizen in Einzelschritten aus — auf dem Gerät
+     sind das rund 0,7 Token je Sekunde statt 15 bis 25. Ursache ist fast immer ein
+     stehengebliebenes Bauverzeichnis: -DGGML_CPU_ARM_ARCH wirkt nur beim Konfigurieren.
+     $WORK/build-arm64 löschen und neu konfigurieren."
+    log "  $SDOT Skalarprodukt-Befehle gefunden (-march=$ARM_ARCH)"
+else
+    printf '\033[1;33m??\033[0m %s\n' "llvm-objdump fehlt — Befehlssatz nicht geprüft." >&2
 fi
 
 log "fertig: $TARGET ($(du -h "$TARGET" | cut -f1), Ausrichtung $WORST Byte)"

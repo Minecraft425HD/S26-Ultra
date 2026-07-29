@@ -86,4 +86,29 @@ class LogFilterTest {
         assertTrue(behalten("ERROR: something broke"))
         assertTrue(behalten("Model Loaded"))
     }
+
+    @Test
+    fun `die Geschwindigkeitszahlen bleiben`() {
+        // Diese Zeilen fehlten, als sich herausstellte, dass Neon mit 0,71 Token je
+        // Sekunde antwortete. Sie standen in der Ausgabe des Servers, aber nicht in der
+        // Datei, die man weitergeben kann — und ohne sie war die Ursache nicht zu sehen.
+        listOf(
+            "1.54.669.945 I slot print_timing: id  0 | task 0 | prompt eval time = " +
+                "38085.71 ms /   159 tokens (  239.53 ms per token,     4.17 tokens per second)",
+            "1.54.669.984 I slot print_timing: id  0 | task 0 |        eval time = " +
+                "14111.84 ms /    10 tokens ( 1411.18 ms per token,     0.71 tokens per second)",
+        ).forEach {
+            assertTrue(behalten(it), "eine Zeitmessung wurde verworfen: $it")
+        }
+    }
+
+    @Test
+    fun `die Angabe zum Befehlssatz bleibt`() {
+        // `system_info` nennt die Rechenbefehle, die die Binärdatei tatsächlich benutzt.
+        // Genau daran ließ sich ablesen, dass für armv8-a übersetzt worden war.
+        val zeile = "0.00.030.112 I srv system_info: n_threads = 8 | NEON = 1 | " +
+            "ARM_FMA = 1 | FP16_VA = 1 | DOTPROD = 0 | MATMUL_INT8 = 0 |"
+
+        assertTrue(behalten(zeile), "die Angabe zum Befehlssatz wurde verworfen")
+    }
 }

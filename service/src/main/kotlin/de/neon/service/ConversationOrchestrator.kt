@@ -56,6 +56,14 @@ data class TurnReport(
     val routeReason: String,
     val latencyMs: Long,
     val usedNoModel: Boolean,
+    /**
+     * Wie viele Token die Antwort lang war.
+     *
+     * Zusammen mit [latencyMs] ergibt das die Zahl, an der sich Geschwindigkeit ablesen
+     * lässt. Sie gehörte lange nur ins Protokoll — und stand deshalb nicht zur Verfügung,
+     * als sich herausstellte, dass Neon mit 0,71 Token je Sekunde antwortete.
+     */
+    val tokenCount: Int = 0,
 )
 
 /**
@@ -73,6 +81,8 @@ data class ChatEntry(
     val modelId: String? = null,
     val routeReason: String? = null,
     val latencyMs: Long = 0,
+    /** Für die Geschwindigkeitsangabe unter der Blase. Siehe [TurnReport.tokenCount]. */
+    val tokenCount: Int = 0,
     /**
      * Eine Mitteilung von Neon über sich selbst, kein Gesprächsbeitrag.
      *
@@ -333,6 +343,7 @@ class ConversationOrchestrator(
                 modelId = report.modelId,
                 routeReason = report.routeReason,
                 latencyMs = report.latencyMs,
+                tokenCount = report.tokenCount,
             )
         )
 
@@ -538,6 +549,7 @@ class ConversationOrchestrator(
             routeReason = selection.reason,
             latencyMs = latency,
             usedNoModel = false,
+            tokenCount = tokens,
         )
     }
 
@@ -626,6 +638,7 @@ class ConversationOrchestrator(
             routeReason = "${selection.reason} — Werkzeug ${call.name}",
             latencyMs = latency,
             usedNoModel = false,
+            tokenCount = tokens,
         )
     }
 
