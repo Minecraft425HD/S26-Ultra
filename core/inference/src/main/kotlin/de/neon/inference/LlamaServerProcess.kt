@@ -252,6 +252,10 @@ class ProcessServerSupervisor(
         val begonnen = System.currentTimeMillis()
         lastOutputAt.set(begonnen)
 
+        // Der zuletzt gemeldete Grund. Nur bei einer Änderung protokolliert — bei alle
+        // 250 ms füllte "Connection refused" sonst die ganze Datei.
+        var gemeldeterGrund: String? = null
+
         NeonLog.i(TAG, "warte auf llama-server, Frist ${budget / 1000} s für ${modelBytes / MB} MB")
 
         while (System.currentTimeMillis() - begonnen < budget) {
@@ -265,18 +269,29 @@ class ProcessServerSupervisor(
                 return true
             }
 
+            // Warum es nicht klappte. Beim Laden steht hier „Connection refused", und das
+            // ist in Ordnung. Steht dort etwas anderes, ist genau das die Antwort auf die
+            // Frage, warum Neon nicht loslegt — und sie darf nicht wieder verloren gehen.
+            val grund = client.lastHealthFailure
+            if (grund != null && grund != gemeldeterGrund) {
+                gemeldeterGrund = grund
+                NeonLog.i(TAG, "llama-server antwortet noch nicht: $grund")
+            }
+
             val vergangen = System.currentTimeMillis() - begonnen
             onLoadingProgress?.invoke(
                 LoadingProgress(
                     elapsedMillis = vergangen,
                     budgetMillis = budget,
-                    lastLine = lastMeaningfulLine,
+                    // Ohne eine Serverzeile ist der Grund das Einzige, was zu sagen ist —
+                    // und besser als eine Zahl, die stumm hochläuft.
+                    lastLine = lastMeaningfulLine ?: grund,
                 )
             )
 
             val stille = System.currentTimeMillis() - lastOutputAt.get()
             if (stille > SILENCE_TIMEOUT_MILLIS) {
-                NeonLog.e(TAG, "llama-server schweigt seit $stille ms und antwortet nicht")
+                NeonLog.e(TAG, "llama-server schweigt seit $stille ms und antwortet nicht${weil(grund)}")
                 return false
             }
 
@@ -290,9 +305,12 @@ class ProcessServerSupervisor(
             return true
         }
 
-        NeonLog.e(TAG, "llama-server war nach $budget ms nicht bereit")
+        NeonLog.e(TAG, "llama-server war nach $budget ms nicht bereit${weil(client.lastHealthFailure)}")
         return false
     }
+
+    /** Hängt den Grund an eine Fehlermeldung, wenn es einen gibt. */
+    private fun weil(grund: String?): String = grund?.let { " — $it" }.orEmpty()
 
     override suspend fun shutdown() = stopProcess()
 

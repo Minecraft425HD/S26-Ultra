@@ -260,9 +260,16 @@ class MainActivity : ComponentActivity() {
      * Läuft bewusst **ohne** den Vordergrunddienst: Wer tippt, braucht kein Mikrofon, also
      * auch keine Mikrofonberechtigung und keine Benachrichtigung. Neon ist damit auch dann
      * benutzbar, wenn man den Dauerlauscher gar nicht möchte.
+     *
+     * Und bewusst **nicht** in `lifecycleScope`: Eine Antwort kann eine Minute dauern, und
+     * in dieser Minute legt man das Telefon weg oder dreht es. Der Scope der Activity
+     * stirbt dabei und nahm die Frage mit — im Protokoll blieb nur
+     * `JobCancellationException`. Der Scope des Containers lebt so lange wie die Anwendung;
+     * die Oberfläche liest den Zustand ohnehin über `StateFlow` und findet die fertige
+     * Antwort vor, wenn sie zurückkommt.
      */
     private fun sendText(container: NeonContainer, text: String) {
-        lifecycleScope.launch {
+        container.scope.launch {
             runCatching {
                 container.orchestrator.handleText(
                     text = text,

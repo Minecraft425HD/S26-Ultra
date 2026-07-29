@@ -46,12 +46,36 @@ class LlamaServerClient(
             get() = (rawStatus?.get("value") as? JsonPrimitive)?.content
     }
 
+    /**
+     * Warum die letzte Gesundheitsprüfung scheiterte — `null`, wenn sie gelang.
+     *
+     * **Warum es dieses Feld gibt.** Hier stand einmal
+     * `runCatching { … }.getOrDefault(false)`. Damit wurde jede Ausnahme zu einem
+     * schlichten `false` verkürzt: nicht protokolliert, nicht gemeldet, spurlos weg.
+     *
+     * Auf dem Gerät sperrte Androids Netzwerkrichtlinie den Zugriff auf 127.0.0.1, und
+     * OkHttp warf bei jedem Aufruf eine `UnknownServiceException`. Für Neon sah das exakt
+     * aus wie „der Server ist noch nicht so weit" — an fünf Versuchen über zwei Tage, mit
+     * einem Server, der jedes Mal einwandfrei lief. Die Ursache hätte in der ersten
+     * Sekunde dagestanden, wenn irgendwer die Ausnahme angesehen hätte.
+     *
+     * Ein verschluckter Fehler ist teurer als ein lauter. Deshalb wird hier festgehalten,
+     * was schiefging, auch wenn der Rückgabewert nur `false` sein kann.
+     */
+    @Volatile
+    var lastHealthFailure: String? = null
+        private set
+
     /** Antwortet der Server überhaupt? */
     fun isHealthy(): Boolean = runCatching {
         http.newCall(Request.Builder().url("$baseUrl/health").get().build()).execute().use {
+            lastHealthFailure = if (it.isSuccessful) null else "HTTP ${it.code}"
             it.isSuccessful
         }
-    }.getOrDefault(false)
+    }.getOrElse { fehler ->
+        lastHealthFailure = describe(fehler)
+        false
+    }
 
     fun listModels(): List<ModelInfo> = runCatching {
         http.newCall(Request.Builder().url("$baseUrl/models").get().build()).execute().use { response ->
@@ -199,6 +223,20 @@ class LlamaServerClient(
             FloatArray(values.size) { (values[it] as JsonPrimitive).content.toFloat() }
         }
     }.getOrNull()
+
+    /**
+     * Eine Ausnahme in einer Zeile, die auf einen Telefonbildschirm passt.
+     *
+     * Der Name der Klasse gehört dazu: `ConnectException` heißt „der Server ist noch nicht
+     * so weit" und ist beim Laden völlig normal, `UnknownServiceException` dagegen heißt
+     * „Android lässt uns gar nicht erst hin" — ein dauerhafter Ausfall. Ohne den Namen
+     * sähen beide gleich aus.
+     */
+    private fun describe(fehler: Throwable): String {
+        val name = fehler.javaClass.simpleName
+        val text = fehler.message?.takeIf { it.isNotBlank() } ?: return name
+        return "$name: ${text.take(200)}"
+    }
 
     private fun errorText(response: Response): String =
         runCatching { response.body?.string().orEmpty().take(300) }.getOrDefault("")

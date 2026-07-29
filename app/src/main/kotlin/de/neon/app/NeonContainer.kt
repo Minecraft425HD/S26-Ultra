@@ -206,8 +206,14 @@ class NeonContainer(context: Context) {
      *
      * Bewusst kein Scope des Dienstes: Die gelernten Beispiele sollen auch dann noch
      * geschrieben werden, wenn Neon gerade beendet wurde.
+     *
+     * Aus demselben Grund läuft hier auch eine getippte Frage. Sie lief einmal in
+     * `lifecycleScope` der Activity — wer die App verließ oder das Gerät drehte, während
+     * Neon rechnete, verlor die Antwort. Im Protokoll stand dann nur
+     * `JobCancellationException: Job was cancelled`. Bei einer Minute Ladezeit ist das
+     * nicht der seltene Fall, sondern der wahrscheinliche.
      */
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    internal val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val learner = TurnLearner(embeddings) { example ->
         router.learn(example)

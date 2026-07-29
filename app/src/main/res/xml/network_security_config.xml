@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Neon darf mit seinem eigenen Server sprechen.
+
+  `llama-server` läuft als Kindprozess dieser App und hört auf http://127.0.0.1:18080.
+  Seit Android 9 ist unverschlüsseltes HTTP für Apps ab API 28 verboten, sofern nichts
+  anderes konfiguriert ist — und 127.0.0.1 ist davon **nicht** ausgenommen. Ohne diese
+  Datei wirft OkHttp vor jedem Verbindungsversuch
+
+      UnknownServiceException: CLEARTEXT communication to 127.0.0.1
+      not permitted by network security policy
+
+  Der Server lud dann durch, meldete "listening on http://127.0.0.1:18080" — und Neon
+  bekam ihn trotzdem nie zu fassen, weil die Gesundheitsprüfung nie beim Server ankam.
+  Nach anderthalb Minuten Stille erschlug Neon einen Server, der die ganze Zeit
+  bereitstand. Fünf Versuche über zwei Tage, jedes Mal gleich.
+
+  Ausdrücklich **nicht** `android:usesCleartextTraffic="true"` im Manifest: Das erlaubte
+  Klartext überallhin. Hier gilt die Ausnahme genau dem Prozess, der zur App selbst
+  gehört; für jedes andere Ziel — auch den späteren Cloud-Pfad — bleibt es beim Verbot.
+-->
+<network-security-config>
+
+    <base-config cleartextTrafficPermitted="false" />
+
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+
+</network-security-config>
