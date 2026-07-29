@@ -16,15 +16,31 @@ import java.io.InputStream
  */
 class UriSource(
     private val context: Context,
-    private val uri: Uri,
+    val uri: Uri,
     override val name: String,
     override val path: String,
     override val sizeBytes: Long,
+    /** Was der Anbieter über den Typ sagt. Oft `null` oder geraten. */
+    val mimeType: String? = null,
 ) : AttachmentSource {
+
+    /**
+     * Ob hier Text drinstecken könnte, den man sieht, aber nicht auslesen kann.
+     *
+     * Erst der gemeldete Typ, dann die Endung: Manche Anbieter melden gar nichts, und ein
+     * Bildschirmfoto aus der Galerie kommt regelmäßig ohne Typangabe herein.
+     */
+    val istBild: Boolean
+        get() = mimeType?.startsWith("image/") == true ||
+            name.substringAfterLast('.', "").lowercase() in BILD_ENDUNGEN
 
     override fun open(): InputStream =
         context.contentResolver.openInputStream(uri)
             ?: error("Datei ließ sich nicht öffnen: $name")
+
+    companion object {
+        val BILD_ENDUNGEN = setOf("jpg", "jpeg", "png", "webp", "heic", "heif", "bmp", "gif")
+    }
 }
 
 /**
@@ -52,6 +68,7 @@ object AndroidSources {
             name = name,
             path = name,
             sizeBytes = dokument.length(),
+            mimeType = dokument.type ?: context.contentResolver.getType(uri),
         )
     }
 
@@ -92,6 +109,7 @@ object AndroidSources {
                         name = name,
                         path = kindPfad,
                         sizeBytes = kind.length(),
+                        mimeType = kind.type,
                     )
                 }
             }

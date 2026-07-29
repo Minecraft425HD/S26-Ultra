@@ -17,6 +17,7 @@ import de.neon.inference.ModelLifecycleManager
 import de.neon.inference.ModelStore
 import de.neon.inference.ProcessServerSupervisor
 import de.neon.attachments.AttachmentIngest
+import de.neon.attachments.BytesSource
 import de.neon.attachments.AttachmentKind
 import de.neon.attachments.IngestResult
 import de.neon.memory.AttachmentRepository
@@ -208,6 +209,9 @@ class NeonContainer(context: Context) {
     private val tts by lazy { AndroidTts(appContext) }
     private val actionExecutor = DeviceActionExecutor(appContext)
 
+    /** Träge: Der Erkenner lädt sein Modell beim ersten Gebrauch, nicht beim Start. */
+    private val imageText by lazy { ImageText(appContext) }
+
     /**
      * Werkzeuge für Handlungen, die die Regelstufe nicht abdeckt.
      *
@@ -275,7 +279,7 @@ class NeonContainer(context: Context) {
         scope.launch {
             attachmentState.value = attachmentState.value.copy(busy = true, message = null)
             runCatching {
-                val ergebnis = AttachmentIngest().ingest(sources)
+                val ergebnis = AttachmentIngest().ingest(mitTextAusBildern(sources))
                 attachments.add(ergebnis.chunks)
                 ergebnis
             }.onSuccess { ergebnis ->
@@ -293,6 +297,37 @@ class NeonContainer(context: Context) {
                 )
             }
         }
+    }
+
+    /**
+     * Ersetzt Bilder durch den Text, der darin steht.
+     *
+     * Das Alltagsmodell kann Bilder technisch nicht sehen. Statt sie als „Binärdatei, nicht
+     * lesbar" abzulegen, wird gelesen, was zu lesen ist — Bildschirmfotos, abfotografierte
+     * Briefe und Zettel decken den weitaus häufigsten Grund ab, warum jemand ein Bild
+     * anhängt.
+     *
+     * Ein Bild ohne Text bleibt ein Bild und wird als solches vermerkt. Es stillschweigend
+     * verschwinden zu lassen wäre schlimmer als es abzulehnen.
+     */
+    private suspend fun mitTextAusBildern(
+        sources: List<de.neon.attachments.AttachmentSource>,
+    ): List<de.neon.attachments.AttachmentSource> = sources.map { quelle ->
+        if (quelle !is UriSource || !quelle.istBild) return@map quelle
+
+        val text = imageText.read(quelle.uri)
+        if (text.isNullOrBlank()) {
+            NeonLog.i(TAG, "Kein Text in ${quelle.name}")
+            return@map quelle
+        }
+
+        // Der Pfad behält den Bildnamen: In einer Antwort soll „aus rechnung.jpg" stehen
+        // und nicht ein erfundener Textdateiname.
+        BytesSource(
+            name = quelle.name,
+            path = quelle.path,
+            bytes = "Text aus dem Bild ${quelle.name}:\n\n$text".toByteArray(),
+        )
     }
 
     /**

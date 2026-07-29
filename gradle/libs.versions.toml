@@ -52,6 +52,9 @@ androidx-security-crypto = { module = "androidx.security:security-crypto", versi
 androidx-documentfile = { module = "androidx.documentfile:documentfile", version = "1.0.1" }
 
 onnxruntime-android = { module = "com.microsoft.onnxruntime:onnxruntime-android", version.ref = "onnxruntime" }
+# Texterkennung in Bildern, im Gerät und offline. Das Modell steckt in der APK, es wird
+# nichts nachgeladen und nichts verschickt.
+mlkit-text-recognition = { module = "com.google.mlkit:text-recognition", version = "16.0.1" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 
 junit = { module = "junit:junit", version.ref = "junit" }
