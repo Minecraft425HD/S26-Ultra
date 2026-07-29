@@ -20,6 +20,13 @@ class DeviceStateProvider(
     private val context: Context,
     /** Welche Modelle gerade warm sind; kommt vom ModelLifecycleManager. */
     private val warmModelIds: () -> Set<String> = { emptySet() },
+    /**
+     * Welche Modelldateien auf der Platte liegen; kommt vom ModelStore.
+     *
+     * `null` heißt „unbekannt" und schaltet die Einschränkung ab — die Voreinstellung,
+     * damit ein Aufrufer, der das nicht setzt, sich wie bisher verhält.
+     */
+    private val availableModelIds: (() -> Set<String>)? = null,
     /** Wie viel Speicher Modelle noch belegen dürfen. */
     private val memoryBudgetBytes: Long = DEFAULT_MODEL_BUDGET,
 ) {
@@ -35,6 +42,7 @@ class DeviceStateProvider(
         network = networkState(),
         loadedModelIds = warmModelIds(),
         availableMemoryBytes = availableForModels(),
+        availableModelIds = availableModelIds?.invoke(),
     )
 
     private fun batteryPercent(): Int =

@@ -78,6 +78,15 @@ class NeonContainer(context: Context) {
     private val deviceStateProvider = DeviceStateProvider(
         context = appContext,
         warmModelIds = { lifecycle.warmModelIds() },
+        // Damit der Router nur unter dem wählt, was tatsächlich importiert wurde. Ohne das
+        // gewinnt bei einer schweren Frage der Denker, dessen Datei niemand geladen hat,
+        // und Neon sagt „nicht heruntergeladen", statt mit dem Alltagsmodell zu antworten.
+        //
+        // Bei jedem Durchgang neu gelesen und nicht gemerkt: Ein Import soll sofort wirken,
+        // nicht erst nach einem Neustart.
+        availableModelIds = {
+            registry.models.filter { modelStore.isAvailable(it) }.map { it.id }.toSet()
+        },
     )
 
     /**

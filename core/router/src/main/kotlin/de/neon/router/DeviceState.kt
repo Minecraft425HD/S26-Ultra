@@ -35,6 +35,19 @@ data class DeviceState(
     val loadedModelIds: Set<String>,
     /** Wie viel Speicher darf ein neu zu ladendes Modell noch belegen? */
     val availableMemoryBytes: Long,
+    /**
+     * Welche Modelldateien liegen tatsächlich auf der Platte?
+     *
+     * `null` heißt ausdrücklich **unbekannt** und nicht „keine": Dann wird nicht gefiltert.
+     * Der Unterschied ist wichtig, weil ein Aufrufer, der diesen Wert nicht setzt, sonst
+     * schlagartig gar kein Modell mehr fände.
+     *
+     * Ohne dieses Feld wählte die Auswahl-Policy aus der gesamten Startaufstellung, auch
+     * aus Modellen, die nie heruntergeladen wurden. Der Fehler fiel erst eine Ebene später
+     * auf, und Neon antwortete „das Modell ist noch nicht heruntergeladen", obwohl ein
+     * brauchbares bereitlag.
+     */
+    val availableModelIds: Set<String>? = null,
 ) {
     /**
      * Sparmodus: Der Akku ist knapp und das Gerät hängt nicht am Ladegerät, oder es
@@ -51,6 +64,20 @@ data class DeviceState(
 
     fun fitsInMemory(model: ModelSpec): Boolean =
         isLoaded(model) || model.sizeBytes <= availableMemoryBytes
+
+    /** Bei unbekanntem Bestand gilt jedes Modell als vorhanden — siehe [availableModelIds]. */
+    fun isAvailable(model: ModelSpec): Boolean =
+        availableModelIds?.contains(model.id) ?: true
+
+    /**
+     * Schränkt eine Kandidatenliste auf das Vorhandene ein.
+     *
+     * Bleibt dabei nichts übrig, kommt die Liste unverändert zurück. Dann ist wirklich kein
+     * Modell da, und die richtige Antwort ist die ehrliche Ansage aus dem Gesprächsablauf —
+     * nicht eine leere Auswahl, an der der Router scheitern würde.
+     */
+    fun <T> restrictToAvailable(models: List<T>, id: (T) -> ModelSpec): List<T> =
+        models.filter { isAvailable(id(it)) }.ifEmpty { models }
 
     companion object {
         const val LOW_BATTERY_PERCENT = 20

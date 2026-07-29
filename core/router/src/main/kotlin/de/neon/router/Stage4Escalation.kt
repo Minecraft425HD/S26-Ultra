@@ -71,10 +71,18 @@ class EscalationPolicy(
         )
     }
 
-    /** Das stärkste Modell, das dieses Gerät derzeit tragen kann. */
-    fun strongestAvailable(state: DeviceState): ModelSpec =
-        registry.generativeModels()
+    /**
+     * Das stärkste Modell, das dieses Gerät derzeit tragen kann **und** das da ist.
+     *
+     * „Verfügbar" hieß hier lange nur „passt in den Speicher". Ein Modell, dessen Datei nie
+     * heruntergeladen wurde, passt aber vorzüglich in den Speicher — und wurde deshalb als
+     * stärkste Wahl gemeldet, obwohl es damit nicht antworten konnte.
+     */
+    fun strongestAvailable(state: DeviceState): ModelSpec {
+        val vorhanden = state.restrictToAvailable(registry.generativeModels()) { it }
+        return vorhanden
             .filter { state.fitsInMemory(it) }
             .maxByOrNull { it.maxComplexity }
-            ?: registry.generativeModels().minBy { it.sizeBytes }
+            ?: vorhanden.minBy { it.sizeBytes }
+    }
 }

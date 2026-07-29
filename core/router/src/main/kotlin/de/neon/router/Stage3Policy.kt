@@ -62,7 +62,17 @@ class SelectionPolicy(
      * Liefert immer ein Ergebnis: Lieber eine Antwort vom kleinen Modell als gar keine.
      */
     fun select(analysis: RouteAnalysis, state: DeviceState): ModelSelection {
-        val all = registry.generativeModels()
+        // Zuerst auf das einschränken, was wirklich auf der Platte liegt. Ohne diesen
+        // Schritt gewinnt bei einer schweren Frage der Denker, auch wenn dessen Datei nie
+        // heruntergeladen wurde — und Neon antwortet, er könne nicht antworten, obwohl das
+        // Alltagsmodell bereitliegt und die Frage ordentlich beantwortet hätte.
+        val alle = registry.generativeModels()
+        val all = state.restrictToAvailable(alle) { it }
+
+        // Ob die Einschränkung überhaupt etwas weggenommen hat. Steht nachher im Grund:
+        // Wer im Diagnose-Screen sieht, dass eine schwere Frage beim kleinen Modell landete,
+        // soll auch erfahren, dass das an den fehlenden Dateien lag und nicht am Router.
+        val eingeschraenkt = all.size < alle.size
 
         val strict = all.filter { eligible(it, analysis, state, relaxed = false) }
         val relaxed = strict.ifEmpty { all.filter { eligible(it, analysis, state, relaxed = true) } }
@@ -77,7 +87,7 @@ class SelectionPolicy(
         return ModelSelection(
             model = winner.model,
             analysis = analysis,
-            reason = explain(winner, analysis, state),
+            reason = explain(winner, analysis, state, eingeschraenkt),
             allowEscalation = canEscalate(winner.model, analysis, state),
             candidates = scored,
             constraintsRelaxed = strict.isEmpty(),
@@ -173,7 +183,10 @@ class SelectionPolicy(
     ): Boolean {
         if (state.isConstrained) return false
         if (analysis.needsVision) return false
-        val strongest = registry.generativeModels().maxOf { it.maxComplexity }
+        // Ebenfalls nur unter dem Vorhandenen: Nachzuziehen lohnt nur, wenn es überhaupt
+        // etwas Stärkeres auf der Platte gibt.
+        val strongest = state.restrictToAvailable(registry.generativeModels()) { it }
+            .maxOf { it.maxComplexity }
         return model.maxComplexity < strongest
     }
 
@@ -181,6 +194,7 @@ class SelectionPolicy(
         winner: ScoredCandidate,
         analysis: RouteAnalysis,
         state: DeviceState,
+        eingeschraenkt: Boolean,
     ): String {
         val parts = mutableListOf<String>()
         parts += "${analysis.category.name.lowercase()}, Komplexität ${analysis.complexity}"
@@ -188,6 +202,7 @@ class SelectionPolicy(
         if (state.isLoaded(winner.model)) parts += "bereits geladen"
         if (state.isConstrained) parts += "Sparmodus aktiv"
         if (analysis.needsVision) parts += "Bild erforderlich"
+        if (eingeschraenkt) parts += "nur importierte Modelle zur Wahl"
         return parts.joinToString(", ")
     }
 
