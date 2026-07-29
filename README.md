@@ -117,6 +117,25 @@ Neu bauen — nur nötig, um llama.cpp zu aktualisieren:
 ANDROID_NDK=/pfad/zum/ndk ./scripts/build-llama-server.sh
 ```
 
+### 16-KB-Speicherseiten
+
+Jedes Gerät, das mit Android 16 und mindestens 8 GB Arbeitsspeicher ausgeliefert wird — das
+S26 Ultra also —, arbeitet mit 16-KB-Speicherseiten statt der früheren 4 KB. Der
+Android-Linker weist jede ELF-Datei ab, deren `LOAD`-Segmente gröber ausgerichtet sind: Das
+Programm startet nicht, die Bibliothek lädt nicht.
+
+Das ist deshalb heimtückisch, weil davon außerhalb des Telefons nichts auffällt. Die APK
+baut, die Tests laufen, die Datei sieht normal aus — und auf dem Gerät antwortet Neon
+einfach nie. Genau so lag es hier: `llama-server` war auf 4 KB ausgerichtet, und
+ONNX Runtime 1.20.0 lieferte die große Bibliothek auf 16 KB, die JNI-Brücke daneben aber auf
+4 KB.
+
+Zwei Vorkehrungen halten das jetzt in Ordnung. Das Bauskript richtet ausdrücklich auf 16 KB
+aus (`-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON`; NDK r27 tut das nur auf Zuruf, erst r28 von
+selbst) und misst am Ende nach. Und die CI prüft **jede** `lib/arm64-v8a/*.so` der fertigen
+APK, nicht nur die selbstgebaute — damit fällt derselbe Fehler auch bei einer künftigen
+Abhängigkeit vor der Auslieferung auf statt danach.
+
 ## Wenn etwas schiefgeht
 
 Auf einem Telefon ohne Entwicklungsumgebung ist ein Fehler sonst eine Sackgasse: Android
