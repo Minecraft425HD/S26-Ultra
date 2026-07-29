@@ -39,11 +39,31 @@ interface ServerSupervisor {
 class ProcessServerSupervisor(
     private val context: Context,
     private val port: Int = DEFAULT_PORT,
-    private val contextSize: Int = DEFAULT_CONTEXT_SIZE,
+    contextSize: Int = DEFAULT_CONTEXT_SIZE,
     private val threads: Int = DEFAULT_THREADS,
 ) : ServerSupervisor {
 
+    /**
+     * Die Größe des Kontextfensters.
+     *
+     * Änderbar, weil der richtige Wert vom Gerät und vom Gebrauch abhängt: Wer Anhänge
+     * benutzt, braucht mehr; wer nur kurz etwas fragt, verschenkt damit Arbeitsspeicher und
+     * Zeit. Eine Änderung wirkt beim nächsten Serverstart — der laufende Server wird dafür
+     * beendet, denn die Größe steht beim Start fest und lässt sich nicht nachjustieren.
+     */
+    @Volatile
+    var contextSize: Int = contextSize.coerceIn(MIN_CONTEXT_SIZE, MAX_CONTEXT_SIZE)
+        set(value) {
+            val neu = value.coerceIn(MIN_CONTEXT_SIZE, MAX_CONTEXT_SIZE)
+            if (neu == field) return
+            field = neu
+            // Nicht sofort neu starten: Der nächste Aufruf tut das ohnehin, und ein
+            // Neustart mitten in einer laufenden Antwort wäre das Gegenteil von hilfreich.
+            servingModelId = null
+        }
+
     private var process: Process? = null
+    @Volatile
     private var servingModelId: String? = null
     private var client: LlamaServerClient? = null
     private val stopping = AtomicBoolean(false)
@@ -102,6 +122,13 @@ class ProcessServerSupervisor(
             "--port", port.toString(),
             "--ctx-size", contextSize.toString(),
             "--threads", threads.toString(),
+            // Der Schlüssel-Wert-Speicher ist der Teil, der mit dem Kontextfenster wächst
+            // — bei diesem Modell 144 KB je Token. Auf acht Bit komprimiert halbiert sich
+            // das, und ein Fenster von 16384 kostet damit gut ein Gigabyte statt zwei
+            // ein Viertel. Gegen einen echten Server geprüft, einschließlich einer
+            // vollständigen Antwort.
+            "--cache-type-k", KV_CACHE_TYPE,
+            "--cache-type-v", KV_CACHE_TYPE,
             // Die Chat-Vorlage aus der GGUF-Datei benutzen, statt eine zu raten. Ohne das
             // sieht ein Modell mit ungewöhnlicher Vorlage einen falsch formatierten Prompt.
             "--jinja",
@@ -176,7 +203,44 @@ class ProcessServerSupervisor(
         /** Hoher Port, nur an localhost gebunden. */
         const val DEFAULT_PORT = 18_080
 
-        const val DEFAULT_CONTEXT_SIZE = 4_096
+        /**
+         * Voreinstellung: 16384 Token.
+         *
+         * Rund 12.000 Wörter — genug für einen Gesprächsverlauf samt mehrerer Fundstellen
+         * aus Anhängen. Mit komprimiertem Cache kostet das etwa 1,1 GB, zusammen mit dem
+         * Alltagsmodell knapp 3,5 GB und damit deutlich weniger, als das Gerät hergibt.
+         */
+        const val DEFAULT_CONTEXT_SIZE = 16_384
+
+        /** Darunter passt kaum eine Seite Text — dann lohnt der ganze Aufwand nicht. */
+        const val MIN_CONTEXT_SIZE = 4_096
+
+        /**
+         * Obergrenze. Darüber wird es auf 16 GB eng, sobald nebenher etwas anderes läuft,
+         * und jeder Prompt braucht spürbar länger, weil mehr Text durchgerechnet wird.
+         */
+        const val MAX_CONTEXT_SIZE = 32_768
+
+        /**
+         * Wie der Schlüssel-Wert-Speicher abgelegt wird.
+         *
+         * `q8_0` halbiert ihn gegenüber `f16` bei einem Qualitätsverlust, den man in einer
+         * Antwort nicht bemerkt — anders als bei `q4_0`, wo längere Zusammenhänge sichtbar
+         * leiden.
+         */
+        const val KV_CACHE_TYPE = "q8_0"
+
+        /**
+         * Wie viel Arbeitsspeicher ein Token im Schlüssel-Wert-Speicher belegt.
+         *
+         * Gerechnet aus der Modellkonfiguration von Qwen3 4B: 36 Schichten, 8 KV-Köpfe,
+         * head_dim 128, Schlüssel und Wert je ein Byte je Element bei `q8_0` — macht
+         * 2 * 36 * 8 * 128 = 73728 Byte. Bei `f16` das Doppelte.
+         *
+         * Gilt für das Alltagsmodell. Ein anderes Modell hat andere Zahlen; für die
+         * Anzeige neben dem Regler ist das die richtige Größenordnung.
+         */
+        const val KV_BYTES_PER_TOKEN = 73_728L
 
         /**
          * Acht Threads. Der Snapdragon 8 Elite Gen 5 hat mehr Kerne, aber über den großen

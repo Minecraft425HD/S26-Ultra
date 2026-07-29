@@ -64,6 +64,8 @@ class NeonContainer(context: Context) {
 
     private val appContext = context.applicationContext
 
+    private val einstellungen = appContext.getSharedPreferences("neon", Context.MODE_PRIVATE)
+
     val registry: ModelRegistry = ModelRegistry.defaultForS26Ultra()
 
     val modelStore = ModelStore(File(appContext.filesDir, "models"))
@@ -74,7 +76,24 @@ class NeonContainer(context: Context) {
      * Er läuft als eigener Prozess: Ein Modell, das den Speicher sprengt, reißt damit nicht
      * die Hörschleife mit — Neon kann weiter zuhören und melden, dass es nicht geklappt hat.
      */
-    private val serverSupervisor = ProcessServerSupervisor(appContext)
+    private val serverSupervisor = ProcessServerSupervisor(
+        context = appContext,
+        contextSize = einstellungen.getInt(SCHLUESSEL_KONTEXT, ProcessServerSupervisor.DEFAULT_CONTEXT_SIZE),
+    )
+
+    /**
+     * Die Größe des Kontextfensters, dauerhaft gemerkt.
+     *
+     * Anders als der Weckwort-Schwellwert überdauert dieser Wert einen Neustart der App:
+     * Wer ihn einmal an sein Gerät angepasst hat, will das nicht bei jedem Start wiederholen
+     * — und ein falscher Wert fällt erst auf, wenn der Speicher knapp wird.
+     */
+    var contextSize: Int
+        get() = serverSupervisor.contextSize
+        set(value) {
+            serverSupervisor.contextSize = value
+            einstellungen.edit().putInt(SCHLUESSEL_KONTEXT, serverSupervisor.contextSize).apply()
+        }
 
     val inferenceAvailable: Boolean get() = serverSupervisor.isAvailable
 
@@ -412,6 +431,7 @@ class NeonContainer(context: Context) {
 
     private companion object {
         const val TAG = "NeonContainer"
+        const val SCHLUESSEL_KONTEXT = "kontextfenster"
     }
 
     /** Ersatz, solange das VAD-Modell fehlt: lässt alles durch. */

@@ -76,6 +76,11 @@ class LlamaServerIntegrationTest {
             // einen Server. Mit vier Threads je Instanz überlastet das den Rechner, und der
             // Test scheitert an einer Zeitüberschreitung statt an einem echten Fehler.
             "--threads", "2",
+            // Genau die Schalter, mit denen ProcessServerSupervisor startet. Sie hier
+            // wegzulassen hieße, etwas anderes zu prüfen als das, was auf dem Telefon
+            // läuft — und ein Server, der eine Einstellung ablehnt, fiele erst dort auf.
+            "--cache-type-k", ProcessServerSupervisor.KV_CACHE_TYPE,
+            "--cache-type-v", ProcessServerSupervisor.KV_CACHE_TYPE,
             "--jinja",
             "--no-webui",
         ).redirectErrorStream(true).start()
@@ -228,6 +233,30 @@ class LlamaServerIntegrationTest {
             ).toList()
         }
         assertTrue(chunks.any { it is GenerationChunk.Failed })
+    }
+
+    @Test
+    fun `der Server nimmt den komprimierten Schluessel-Wert-Speicher an`() = runBlocking {
+        // Der Server startet in startServer() bereits mit q8_0 für Schlüssel und Wert. Läuft
+        // dieser Test durch, ist das belegt — und zwar nicht daran, dass der Prozess lebt,
+        // sondern daran, dass eine vollständige Antwort herauskommt. Manche Kombinationen
+        // von Cache-Typ und Beschleuniger scheitern erst beim Rechnen, nicht beim Start.
+        val engine = engine() ?: return@runBlocking
+        assertTrue(engine.load(testModel, modelFile))
+
+        val chunks = withTimeout(TIMEOUT_MILLIS) {
+            engine.generate(
+                GenerationRequest(
+                    messages = listOf(ChatMessage(Role.USER, "Zähle von eins bis fünf.")),
+                    maxTokens = 32,
+                    temperature = 0f,
+                )
+            ).toList()
+        }
+
+        val text = chunks.filterIsInstance<GenerationChunk.Token>().joinToString("") { it.text }
+        assertTrue(text.isNotBlank(), "keine Antwort mit komprimiertem Cache: ${'$'}chunks")
+        assertTrue(chunks.none { it is GenerationChunk.Failed }, "Fehler: ${'$'}chunks")
     }
 
     @Test

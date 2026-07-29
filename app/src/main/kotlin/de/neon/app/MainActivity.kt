@@ -43,6 +43,7 @@ import androidx.lifecycle.lifecycleScope
 import de.neon.audio.CascadeStats
 import de.neon.audio.WakeWordPipeline
 import de.neon.inference.ModelStore
+import de.neon.inference.ProcessServerSupervisor
 import de.neon.platform.NeonLog
 import de.neon.router.ModelSpec
 import de.neon.router.RouterStats
@@ -283,6 +284,8 @@ class MainActivity : ComponentActivity() {
                             importState = importState.collectAsState().value,
                             wakeWordThreshold = ready.wakeWordThreshold,
                             onWakeWordThreshold = { ready.wakeWordThreshold = it },
+                            contextSize = ready.contextSize,
+                            onContextSize = { ready.contextSize = it },
                             onImportModel = { modelId ->
                                 pendingImportModelId = modelId
                                 importState.value = ImportState.Running(modelId, 0)
@@ -420,6 +423,8 @@ private fun NeonScreen(
     readDiagnostics: () -> Diagnostics,
     wakeWordThreshold: Float,
     onWakeWordThreshold: (Float) -> Unit,
+    contextSize: Int,
+    onContextSize: (Int) -> Unit,
     onImportModel: (String) -> Unit,
     onShareLog: () -> Unit,
     onSpeak: () -> Unit,
@@ -584,6 +589,44 @@ private fun NeonScreen(
                         )
                         Text(
                             "Schwellwert: %.2f".format(value),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("Kontextfenster", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Wie viel Text Neon auf einmal überblickt: Gesprächsverlauf, " +
+                                "Fundstellen aus Anhängen und die Antwort zusammen. Mehr " +
+                                "kostet Arbeitsspeicher und macht jede Antwort langsamer.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(Modifier.height(8.dp))
+
+                        var kontext by remember(contextSize) { mutableFloatStateOf(contextSize.toFloat()) }
+                        Slider(
+                            value = kontext,
+                            onValueChange = { kontext = it },
+                            onValueChangeFinished = { onContextSize(kontext.toInt()) },
+                            valueRange = ProcessServerSupervisor.MIN_CONTEXT_SIZE.toFloat()..
+                                ProcessServerSupervisor.MAX_CONTEXT_SIZE.toFloat(),
+                            // Vier Rastungen: 4096, 11264, 18432, 25600, 32768. Ein stufenloser
+                            // Regler gaukelte eine Genauigkeit vor, die die Sache nicht hat.
+                            steps = 3,
+                        )
+                        Text(
+                            "${kontext.toInt()} Token — etwa ${kontext.toInt() / 1000 * 750} Wörter, " +
+                                gigabytes(kontext.toInt().toLong() * ProcessServerSupervisor.KV_BYTES_PER_TOKEN) +
+                                " Arbeitsspeicher",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Die Änderung wirkt beim nächsten Serverstart — die erste " +
+                                "Antwort danach dauert entsprechend länger.",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
