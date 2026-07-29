@@ -11,7 +11,12 @@ navigation = "2.8.6"
 room = "2.6.1"
 datastore = "1.1.2"
 securityCrypto = "1.1.0-alpha06"
-onnxruntime = "1.20.0"
+# Nicht ohne Grund neuer als nötig: In 1.20.0 ist libonnxruntime.so auf 16 KB ausgerichtet,
+# die JNI-Brücke libonnxruntime4j_jni.so daneben aber nur auf 4 KB. Auf einem Gerät mit
+# 16-KB-Speicherseiten — jedes mit Android 16 ausgelieferte ab 8 GB RAM, also auch das
+# S26 Ultra — lässt sich die Brücke damit nicht laden, und ohne sie gibt es weder Weckwort
+# noch Sprachaktivitätserkennung. Ab 1.21.1 stehen beide Dateien auf 16 KB.
+onnxruntime = "1.21.1"
 okhttp = "4.12.0"
 junit = "4.13.2"
 kotest = "5.9.1"

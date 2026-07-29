@@ -83,6 +83,56 @@ jobs:
       - name: APK bauen
         run: ./gradlew :app:assembleRelease --stacktrace
 
+      - name: 16-KB-Seitenausrichtung aller nativen Teile prüfen
+        # Der Fehler, der Neon auf dem Zielgerät still unbrauchbar machte.
+        #
+        # Geräte, die mit Android 16 und mindestens 8 GB Arbeitsspeicher ausgeliefert
+        # werden — das S26 Ultra gehört dazu —, arbeiten mit 16-KB-Speicherseiten. Der
+        # Android-Linker weist jede ELF-Datei ab, deren LOAD-Segmente nur auf 4 KB
+        # ausgerichtet sind: llama-server ließe sich nicht starten, die JNI-Brücke von
+        # ONNX Runtime nicht laden. Auf dem Rechner fällt davon nichts auf, im Testlauf
+        # auch nicht — nur auf dem Telefon, und dort nur als "tut nichts".
+        #
+        # Geprüft wird die fertige APK, nicht die Quellen: So ist jede mitgelieferte
+        # Bibliothek erfasst, auch die aus künftigen Abhängigkeiten.
+        run: |
+          APK=app/build/outputs/apk/release/app-release.apk
+          rm -rf /tmp/apk-libs && mkdir -p /tmp/apk-libs
+          unzip -q -o "$APK" 'lib/arm64-v8a/*' -d /tmp/apk-libs
+
+          # Die Ausrichtung steht in der letzten Spalte der LOAD-Zeilen, hexadezimal.
+          # Umgerechnet wird in der Shell und nicht in awk: strtonum gibt es nur in gawk,
+          # und welches awk ein Runner mitbringt, ist nicht verlässlich.
+          schlechteste_ausrichtung() {
+            readelf -lW "$1" \
+              | awk '$1 == "LOAD" { print $NF }' \
+              | while read -r WERT; do printf '%d\n' "$WERT"; done \
+              | sort -n | head -1
+          }
+
+          FOUND=0
+          FAILED=0
+          for SO in /tmp/apk-libs/lib/arm64-v8a/*.so; do
+            FOUND=$((FOUND + 1))
+            WORST=$(schlechteste_ausrichtung "$SO")
+            if [ -z "$WORST" ]; then
+              echo "::error::$(basename "$SO") hat keine LOAD-Segmente."
+              FAILED=$((FAILED + 1))
+            elif [ "$WORST" -lt 16384 ]; then
+              echo "::error::$(basename "$SO") ist auf $WORST Byte ausgerichtet, gebraucht werden 16384."
+              FAILED=$((FAILED + 1))
+            else
+              echo "ok: $(basename "$SO") — $WORST Byte"
+            fi
+          done
+
+          if [ "$FOUND" -eq 0 ]; then
+            echo "::error::Keine nativen Bibliotheken in $APK. Das kann nicht stimmen."
+            exit 1
+          fi
+          [ "$FAILED" -eq 0 ] || exit 1
+          echo "$FOUND Bibliotheken geprüft, alle auf mindestens 16 KB ausgerichtet."
+
       - name: Signatur prüfen
         # Der Punkt, an dem Updates hängen: Alle Fassungen müssen denselben Schlüssel
         # tragen, sonst verweigert Android die Installation über eine bestehende App —

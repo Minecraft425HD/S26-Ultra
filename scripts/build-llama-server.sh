@@ -38,10 +38,20 @@ log "für arm64-v8a konfigurieren"
 # BUILD_SHARED_LIBS=OFF ist entscheidend: So entsteht ein einzelnes, in sich geschlossenes
 # Programm statt eines Bündels aus Programm und mehreren .so-Dateien, die zur Laufzeit
 # gefunden werden müssten.
+#
+# ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON ist ebenso entscheidend, nur unauffälliger:
+# Geräte, die mit Android 16 und mindestens 8 GB Arbeitsspeicher ausgeliefert werden — das
+# S26 Ultra gehört dazu —, arbeiten mit 16-KB-Speicherseiten. Der Android-Linker weist ein
+# Programm ab, dessen LOAD-Segmente nur auf 4 KB ausgerichtet sind; es lässt sich schlicht
+# nicht starten. NDK r27 richtet nur auf Zuruf auf 16 KB aus, erst r28 tut es von selbst.
+# Die Linker-Flags stehen zusätzlich da, damit die Ausrichtung auch dann erhalten bleibt,
+# wenn das Projekt später auf ein neueres NDK oder einen anderen Bauweg wechselt.
 cmake -B "$WORK/build-arm64" -G Ninja -S "$WORK" \
     -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK/build/cmake/android.toolchain.cmake" \
     -DANDROID_ABI=arm64-v8a \
     -DANDROID_PLATFORM=android-33 \
+    -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON \
+    -DCMAKE_EXE_LINKER_FLAGS="-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384" \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_SHARED_LIBS=OFF \
     -DLLAMA_CURL=OFF \
@@ -61,5 +71,25 @@ mkdir -p "$TARGET_DIR"
 log "Symbole entfernen und ablegen"
 "$STRIP" --strip-all -o "$TARGET" "$WORK/build-arm64/bin/llama-server"
 
-log "fertig: $TARGET ($(du -h "$TARGET" | cut -f1))"
+# Nachmessen statt hoffen. Eine falsch ausgerichtete Binärdatei sieht völlig normal aus —
+# sie fällt erst auf dem Telefon auf, und dort nur als "Neon antwortet nie".
+log "Seitenausrichtung prüfen"
+READELF="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+[[ -x "$READELF" ]] || READELF="$(command -v readelf || true)"
+[[ -n "$READELF" ]] || die "readelf nicht gefunden."
+
+# Umrechnung der hexadezimalen Ausrichtung in der Shell statt in awk: strtonum gibt es
+# nur in gawk, und mancher Rechner bringt mawk mit.
+WORST=$("$READELF" -lW "$TARGET" \
+    | awk '$1 == "LOAD" { print $NF }' \
+    | while read -r WERT; do printf '%d\n' "$WERT"; done \
+    | sort -n | head -1)
+[[ -n "$WORST" ]] || die "keine LOAD-Segmente in $TARGET gefunden."
+if (( WORST < 16384 )); then
+    die "LOAD-Segmente nur auf $WORST Byte ausgerichtet. Auf einem Gerät mit 16-KB-Seiten
+     lässt sich das Programm nicht starten. Bauverzeichnis $WORK/build-arm64 löschen und
+     neu konfigurieren — der Schalter wirkt nur beim Konfigurieren, nicht beim Bauen."
+fi
+
+log "fertig: $TARGET ($(du -h "$TARGET" | cut -f1), Ausrichtung $WORST Byte)"
 file "$TARGET" || true
