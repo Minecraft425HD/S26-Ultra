@@ -71,6 +71,15 @@ class MainActivity : ComponentActivity() {
     private val importState = MutableStateFlow<ImportState>(ImportState.Idle)
 
     /**
+     * Ob getippte Antworten auch vorgelesen werden.
+     *
+     * Voreingestellt aus: Wer tippt, sieht auf den Bildschirm, und ein Telefon, das beim
+     * Schreiben lospredigt, ist in fremder Gesellschaft unbrauchbar. Umschaltbar, weil es
+     * beim Kochen oder Fahren genau andersherum ist.
+     */
+    private var speakTypedAnswers by mutableStateOf(false)
+
+    /**
      * Der Weg, wie das Modell ohne Entwicklerwerkzeuge auf das Gerät kommt.
      *
      * Die Datei wird per USB in den Download-Ordner kopiert und hier ausgewählt. Kein adb,
@@ -173,10 +182,61 @@ class MainActivity : ComponentActivity() {
                             onDismiss = null,
                         )
 
-                        else -> NeonScreen(
-                            state = ready.orchestrator.state.collectAsState().value,
-                            lastTurn = ready.orchestrator.lastTurn.collectAsState().value,
-                            models = ready.registry.generativeModels(),
+                        else -> {
+                            val state = ready.orchestrator.state.collectAsState().value
+                            var zeigeDiagnose by remember { mutableStateOf(false) }
+
+                            if (!zeigeDiagnose) {
+                                ChatScreen(
+                                    entries = ready.orchestrator.transcript.collectAsState().value,
+                                    state = state,
+                                    // Alles außer Bereit und Lauschen heißt: Neon arbeitet.
+                                    // Daran hängt, dass man nicht zweimal absendet.
+                                    busy = state != NeonState.GESTOPPT && state != NeonState.LAUSCHEN,
+                                    speakAnswers = speakTypedAnswers,
+                                    onSpeakAnswers = { speakTypedAnswers = it },
+                                    onSend = { text -> sendText(ready, text) },
+                                    onSpeak = { withPermissions { NeonForegroundService.trigger(this) } },
+                                    onShowDiagnostics = { zeigeDiagnose = true },
+                                    onClear = { ready.clearChat() },
+                                )
+                            } else {
+                                DiagnoseAnsicht(ready, state) { zeigeDiagnose = false }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Eine getippte Frage.
+     *
+     * Läuft bewusst **ohne** den Vordergrunddienst: Wer tippt, braucht kein Mikrofon, also
+     * auch keine Mikrofonberechtigung und keine Benachrichtigung. Neon ist damit auch dann
+     * benutzbar, wenn man den Dauerlauscher gar nicht möchte.
+     */
+    private fun sendText(container: NeonContainer, text: String) {
+        lifecycleScope.launch {
+            runCatching { container.orchestrator.handleText(text, speak = speakTypedAnswers) }
+                .onFailure { NeonLog.e("MainActivity", "Getippte Frage fehlgeschlagen", it) }
+        }
+    }
+
+    @Composable
+    private fun DiagnoseAnsicht(ready: NeonContainer, state: NeonState, onBack: () -> Unit) {
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 8.dp, top = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedButton(onClick = onBack) { Text("Zurück zum Chat") }
+            }
+            NeonScreen(
+                state = state,
+                lastTurn = ready.orchestrator.lastTurn.collectAsState().value,
+                models = ready.registry.generativeModels(),
                             isModelAvailable = { ready.modelStore.isAvailable(it) },
                             wakeWordAvailable = ready.wakeWordAvailable,
                             inferenceAvailable = ready.inferenceAvailable,
@@ -198,14 +258,13 @@ class MainActivity : ComponentActivity() {
                                     learnedExamples = ready.learnedExampleCount,
                                 )
                             },
-                            onShareLog = ::shareLog,
-                            onSpeak = { withPermissions { NeonForegroundService.trigger(this) } },
-                            onStart = { withPermissions { NeonForegroundService.start(this) } },
-                            onStop = { NeonForegroundService.stop(this) },
-                        )
-                    }
-                }
-            }
+                onShareLog = ::shareLog,
+                // this@MainActivity, weil wir hier in einem Column-Bereich stehen: ein
+                // blankes this wäre der ColumnScope und nicht der Context.
+                onSpeak = { withPermissions { NeonForegroundService.trigger(this@MainActivity) } },
+                onStart = { withPermissions { NeonForegroundService.start(this@MainActivity) } },
+                onStop = { NeonForegroundService.stop(this@MainActivity) },
+            )
         }
     }
 

@@ -11,6 +11,8 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -76,6 +78,47 @@ data class MemoryFactEntity(
 ) {
     override fun equals(other: Any?): Boolean = this === other || (other is MemoryFactEntity && other.id == id)
     override fun hashCode(): Int = id.hashCode()
+}
+
+/**
+ * Eine Zeile des sichtbaren Gesprächsverlaufs.
+ *
+ * Bewusst getrennt von [RouteOutcomeEntity]: Dort steht, *wie* eine Antwort zustande kam,
+ * hier, *was* gesagt wurde. Das Protokoll wird beschnitten und ausgewertet, der Verlauf
+ * bleibt so, wie man ihn gelesen hat.
+ */
+@Entity(tableName = "chat_entries")
+data class ChatEntryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val fromUser: Boolean,
+    val text: String,
+    val timestampMillis: Long,
+    val modelId: String? = null,
+    val routeReason: String? = null,
+    val latencyMs: Long = 0,
+)
+
+@Dao
+interface ChatEntryDao {
+
+    @Insert
+    suspend fun insert(entry: ChatEntryEntity): Long
+
+    /**
+     * Die neuesten Zeilen — beim Anzeigen wieder umgedreht.
+     *
+     * Andersherum („die ältesten :limit") würde nach ein paar hundert Durchgängen immer
+     * denselben uralten Gesprächsanfang liefern.
+     */
+    @Query("SELECT * FROM chat_entries ORDER BY id DESC LIMIT :limit")
+    suspend fun recent(limit: Int): List<ChatEntryEntity>
+
+    @Query("DELETE FROM chat_entries")
+    suspend fun clear()
+
+    /** Hält den Verlauf in Grenzen, ohne ihn je ganz wegzuwerfen. */
+    @Query("DELETE FROM chat_entries WHERE id NOT IN (SELECT id FROM chat_entries ORDER BY id DESC LIMIT :keep)")
+    suspend fun trimTo(keep: Int)
 }
 
 /** Speichert Vektoren als kompaktes Byte-Feld statt als Text. */
@@ -154,9 +197,10 @@ interface MemoryFactDao {
         RouteOutcomeEntity::class,
         RoutingExampleEntity::class,
         MemoryFactEntity::class,
+        ChatEntryEntity::class,
     ],
-    version = 1,
-    exportSchema = false,
+    version = 2,
+    exportSchema = true,
 )
 @TypeConverters(FloatArrayConverter::class)
 abstract class NeonDatabase : RoomDatabase() {
@@ -164,13 +208,47 @@ abstract class NeonDatabase : RoomDatabase() {
     abstract fun routeOutcomes(): RouteOutcomeDao
     abstract fun routingExamples(): RoutingExampleDao
     abstract fun memoryFacts(): MemoryFactDao
+    abstract fun chatEntries(): ChatEntryDao
 
     companion object {
+
+        /**
+         * Fügt den Gesprächsverlauf hinzu, ohne etwas anzufassen.
+         *
+         * Ausdrücklich **keine** zerstörende Migration: In dieser Datenbank stehen das
+         * persönliche Gedächtnis und die gelernten Routing-Beispiele. Sie beim Update
+         * wegzuwerfen, weil eine Tabelle dazukommt, wäre der teuerste denkbare Preis für
+         * die bequemste Zeile Code.
+         */
+        /**
+         * Muss Spalte für Spalte dem entsprechen, was Room aus [ChatEntryEntity] ableitet.
+         *
+         * Room vergleicht beim Öffnen das tatsächliche Schema mit dem erwarteten und
+         * verweigert bei jeder Abweichung den Dienst — auch bei einer Kleinigkeit wie einem
+         * fehlenden NOT NULL. Als Konstante herausgezogen, damit ein Test sie gegen das von
+         * Room exportierte Schema halten kann, statt dass es beim Nutzer auffällt.
+         */
+        const val CREATE_CHAT_ENTRIES =
+            "CREATE TABLE IF NOT EXISTS `chat_entries` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`fromUser` INTEGER NOT NULL, " +
+                "`text` TEXT NOT NULL, " +
+                "`timestampMillis` INTEGER NOT NULL, " +
+                "`modelId` TEXT, " +
+                "`routeReason` TEXT, " +
+                "`latencyMs` INTEGER NOT NULL)"
+
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(CREATE_CHAT_ENTRIES)
+            }
+        }
+
         fun create(context: Context): NeonDatabase =
             Room.databaseBuilder(
                 context.applicationContext,
                 NeonDatabase::class.java,
                 "neon.db",
-            ).build()
+            ).addMigrations(MIGRATION_1_2).build()
     }
 }

@@ -109,6 +109,7 @@ class ConversationOrchestratorTest {
         tools: ToolRegistry? = null,
         memory: MemoryRecall? = null,
         learner: TurnLearner? = null,
+        onEntry: ((ChatEntry) -> Unit)? = null,
     ): Pair<ConversationOrchestrator, InMemoryRouteOutcomeStore> {
         val resolver = ModelFileResolver { if (modelsAvailable) File("/dev/null") else null }
         val lifecycle = ModelLifecycleManager(engine, resolver)
@@ -130,6 +131,7 @@ class ConversationOrchestratorTest {
             tools = tools,
             memory = memory,
             learner = learner,
+            onEntry = onEntry,
         ) to outcomeStore
     }
 
@@ -239,6 +241,10 @@ class ConversationOrchestratorTest {
             tts = tts,
             engine = FakeEngine(),
         )
+        // Wie im Dienst: Vor der Hörschleife wird gemeldet, dass sie läuft
+        // (NeonForegroundService.kt:129). Ohne das gilt Neon zu Recht als gestoppt —
+        // "hört auf Neon" wäre gelogen, wenn gar kein Mikrofon offen ist.
+        orchestrator.onIdle()
 
         val report = orchestrator.handleUtterance(samples)
 
@@ -431,6 +437,7 @@ class ConversationOrchestratorTest {
     fun `bricht die Ausgabe auf Wunsch ab`() {
         val tts = FakeTts()
         val (orchestrator, _) = orchestrator(FakeAsr(null), tts, FakeEngine())
+        orchestrator.onIdle()
 
         orchestrator.interrupt()
 

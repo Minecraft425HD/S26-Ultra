@@ -16,6 +16,7 @@ import de.neon.inference.LocalRouterLlm
 import de.neon.inference.ModelLifecycleManager
 import de.neon.inference.ModelStore
 import de.neon.inference.ProcessServerSupervisor
+import de.neon.memory.ChatHistoryRepository
 import de.neon.memory.MemoryRepository
 import de.neon.memory.NeonDatabase
 import de.neon.memory.RoutingExampleRepository
@@ -140,6 +141,8 @@ class NeonContainer(context: Context) {
 
     private val memory by lazy { MemoryRepository(database.memoryFacts(), embeddings) }
 
+    private val chatHistory by lazy { ChatHistoryRepository(database.chatEntries()) }
+
     /**
      * Lebt so lange wie die Anwendung.
      *
@@ -202,7 +205,32 @@ class NeonContainer(context: Context) {
             runCatching { memory.recall(query, limit) }.getOrDefault(emptyList())
         },
         learner = learner,
+        // Jede Zeile wandert auf die Platte, damit der Verlauf einen Neustart überlebt.
+        // Im Hintergrund: Eine hakende Datenbank darf das Gespräch nicht aufhalten.
+        onEntry = { entry ->
+            scope.launch {
+                runCatching { chatHistory.append(entry.toEntity()) }
+                    .onFailure { NeonLog.e(TAG, "Verlauf nicht speicherbar", it) }
+            }
+        },
     )
+
+    init {
+        // Den gespeicherten Verlauf zurückholen. Ohne das begänne jedes Gespräch bei null,
+        // und der Chat wäre nach jedem Schließen der App leer.
+        scope.launch {
+            runCatching {
+                val entries = chatHistory.recent().map { it.toEntry() }
+                if (entries.isNotEmpty()) orchestrator.restoreTranscript(entries)
+            }.onFailure { NeonLog.e(TAG, "Verlauf nicht ladbar", it) }
+        }
+    }
+
+    /** Löscht den sichtbaren Verlauf, hier und auf der Platte. */
+    fun clearChat() {
+        orchestrator.clearTranscript()
+        scope.launch { runCatching { chatHistory.clear() } }
+    }
 
     /** Die laufende Hörschleife, solange der Dienst aktiv ist. Für den Diagnose-Screen. */
     @Volatile

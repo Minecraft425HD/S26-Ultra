@@ -21,6 +21,18 @@ android {
     }
 }
 
+/**
+ * Room schreibt das Schema als JSON heraus.
+ *
+ * Nicht Zierrat: Eine handgeschriebene Migration muss auf die Spalte genau dem entsprechen,
+ * was Room erwartet — sonst verweigert Room beim nächsten Start das Öffnen mit
+ * "Migration didn't properly handle". Mit der exportierten Datei lässt sich das vor der
+ * Auslieferung vergleichen statt auf dem Telefon zu erleben.
+ */
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 dependencies {
     api(project(":core:router"))
     implementation(libs.androidx.core.ktx)

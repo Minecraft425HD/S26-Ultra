@@ -134,3 +134,49 @@ class MemoryRepository(
         const val MIN_SIMILARITY = 0.45
     }
 }
+
+/**
+ * Der Gesprächsverlauf auf der Platte.
+ *
+ * Zweck ist allein, dass ein Neustart das Gespräch nicht wegwirft. Ausgewertet wird hier
+ * nichts — dafür gibt es das Protokoll der Durchgänge.
+ */
+class ChatHistoryRepository(
+    private val dao: ChatEntryDao,
+    private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
+) {
+
+    /**
+     * Die letzten Zeilen, älteste zuerst.
+     *
+     * Der Datenbankzugriff liefert sie neueste-zuerst, weil nur so die Begrenzung am
+     * richtigen Ende greift; zum Anzeigen werden sie hier umgedreht.
+     */
+    suspend fun recent(limit: Int = DEFAULT_LIMIT): List<ChatEntryEntity> =
+        withContext(dispatcher) {
+            runCatching { dao.recent(limit).reversed() }.getOrDefault(emptyList())
+        }
+
+    suspend fun append(entry: ChatEntryEntity) = withContext(dispatcher) {
+        runCatching {
+            dao.insert(entry)
+            // Nach jedem Eintrag beschneiden statt einmal beim Start: Ein Verlauf, der
+            // ungebremst wächst, macht das Laden mit der Zeit spürbar langsamer.
+            dao.trimTo(MAX_ENTRIES)
+        }
+        Unit
+    }
+
+    suspend fun clear() = withContext(dispatcher) {
+        runCatching { dao.clear() }
+        Unit
+    }
+
+    private companion object {
+        /** So viel wird beim Start wiederhergestellt — mehr liest ohnehin niemand nach. */
+        const val DEFAULT_LIMIT = 200
+
+        /** Obergrenze auf der Platte. Bei ein paar hundert Zeilen sind das wenige hundert KB. */
+        const val MAX_ENTRIES = 1_000
+    }
+}
