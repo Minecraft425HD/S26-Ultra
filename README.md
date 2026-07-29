@@ -58,7 +58,14 @@ gebraucht hätte. Die Grenzen liegen in der gemessenen Lücke: Umformulierungen 
 | Alltag | Qwen3 4B Instruct | ~2,5 GB | Standard |
 | Denker | Qwen3 8B | ~5,0 GB | auf Abruf |
 | Code | Qwen3 Coder 7B | ~4,5 GB | auf Abruf |
-| Bild | Gemma 3n E4B | ~3,0 GB | auf Abruf |
+| Bild | Gemma 3 4B + mmproj | ~3,1 GB | auf Abruf |
+
+Das Bildmodell besteht aus **zwei** Dateien: den Gewichten und einem Projektor, der
+Bildkacheln in den Raum des Sprachmodells übersetzt. Ohne die zweite startet der Server zwar,
+kann aber keine Bilder ansehen — deshalb gilt ein Bildmodell erst als verfügbar, wenn beide
+da sind, und deshalb zählt es mit der Summe beider Größen. Hier stand zuvor Gemma 3n, für das
+es gar keinen Projektor gibt: eine Zeile, die ein Bildmodell benannte, mit dem Bilder
+unmöglich waren.
 
 Von 16 GB RAM belegt One UI etwa 6 GB; Neon hält höchstens 5 GB für Modelle belegt. Bei
 1 TB Speicher liegen alle gleichzeitig auf der Platte — gewechselt wird nur, was im RAM ist.
