@@ -39,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import de.neon.audio.CascadeStats
 import de.neon.audio.WakeWordPipeline
@@ -55,6 +56,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 class MainActivity : ComponentActivity() {
 
@@ -233,6 +235,7 @@ class MainActivity : ComponentActivity() {
                                     onSpeakAnswers = { speakTypedAnswers = it },
                                     attachments = ready.attachmentState.collectAsState().value,
                                     sources = ready.orchestrator.lastSources.collectAsState().value,
+                                    loading = ready.orchestrator.loading.collectAsState().value,
                                     onPickFiles = { pickAttachments.launch(arrayOf("*/*")) },
                                     onPickFolder = { pickFolder.launch(null) },
                                     onClearAttachments = { ready.clearAttachments() },
@@ -352,7 +355,37 @@ class MainActivity : ComponentActivity() {
      * Ohne `adb` gibt es sonst keinen Weg an die Fehlermeldungen — und die entscheidende
      * steht meistens in der Ausgabe von llama-server, nicht in dem, was Neon vorliest.
      */
-    private fun shareLog() = shareText("Neon-Protokoll", NeonLog.fullText().ifBlank { "leer" })
+    /**
+     * Gibt das Protokoll als **Datei** weiter, nicht als Nachrichtentext.
+     *
+     * Vorher stand alles in `Intent.EXTRA_TEXT`. Android überträgt Intent-Inhalte über
+     * Binder, dessen Transaktionsgrenze bei rund einem Megabyte liegt — praktisch deutlich
+     * darunter. Ein Protokoll mit der Ausgabe von llama-server sprengt das; was ankam, war
+     * zweimal mitten im Wort abgeschnitten und damit für die Fehlersuche wertlos. Ein
+     * Dateizeiger kennt diese Grenze nicht.
+     */
+    private fun shareLog() {
+        val text = NeonLog.fullText().ifBlank { "leer" }
+        val uri = runCatching {
+            val ordner = File(cacheDir, "geteilt").apply { mkdirs() }
+            val datei = File(ordner, "neon-protokoll.txt")
+            datei.writeText(text)
+            FileProvider.getUriForFile(this, "$packageName.protokoll", datei)
+        }.getOrElse {
+            NeonLog.e("MainActivity", "Protokolldatei nicht schreibbar", it)
+            // Rückfall auf den alten Weg. Abgeschnitten ist immer noch besser als nichts.
+            shareText("Neon-Protokoll", text)
+            return
+        }
+
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "Neon-Protokoll")
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(Intent.createChooser(intent, "Neon-Protokoll"))
+    }
 
     private fun shareText(subject: String, text: String) {
         val intent = Intent(Intent.ACTION_SEND).apply {

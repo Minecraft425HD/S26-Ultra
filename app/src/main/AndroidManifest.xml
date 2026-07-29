@@ -21,6 +21,25 @@
             </intent-filter>
         </activity>
 
+
+        <!--
+          Zum Weitergeben des Protokolls als Datei.
+
+          Vorher ging es als Text in Intent.EXTRA_TEXT. Android überträgt Intent-Inhalte
+          über Binder, dessen Transaktionsgrenze bei rund einem Megabyte liegt — praktisch
+          darunter. Ein Protokoll mit der Ausgabe von llama-server sprengt das, und was
+          ankam, war mitten im Wort abgeschnitten. Ein Dateizeiger hat diese Grenze nicht.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.protokoll"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
     </application>
 
 </manifest>

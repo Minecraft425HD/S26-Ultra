@@ -42,6 +42,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import de.neon.service.ChatEntry
+import de.neon.service.LoadingStatus
 import de.neon.service.NeonState
 
 /**
@@ -61,6 +62,7 @@ fun ChatScreen(
     onSpeakAnswers: (Boolean) -> Unit,
     attachments: AttachmentState,
     sources: List<String>,
+    loading: LoadingStatus?,
     onPickFiles: () -> Unit,
     onPickFolder: () -> Unit,
     onClearAttachments: () -> Unit,
@@ -116,7 +118,22 @@ fun ChatScreen(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 CircularProgressIndicator(modifier = Modifier.height(16.dp).widthIn(min = 16.dp))
-                Text(beschreibe(state), style = MaterialTheme.typography.bodySmall)
+                Column {
+                    Text(beschreibe(state), style = MaterialTheme.typography.bodySmall)
+
+                    // Die mitlaufende Zahl. Ohne sie sieht eine Minute Ladezeit genauso aus
+                    // wie ein Hänger — und man gibt auf, bevor die Antwort kommt.
+                    loading?.let {
+                        Text(
+                            buildString {
+                                append("${it.elapsedMillis / 1000} s")
+                                if (it.budgetMillis > 0) append(" von höchstens ${it.budgetMillis / 1000} s")
+                                it.lastLine?.let { zeile -> append(" · ${zeile.take(60)}") }
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
             }
         }
 
@@ -208,8 +225,13 @@ private fun Blase(entry: ChatEntry) {
                 .widthIn(max = 320.dp)
                 .clip(RoundedCornerShape(16.dp))
                 .background(
-                    if (vomNutzer) MaterialTheme.colorScheme.primaryContainer
-                    else MaterialTheme.colorScheme.surfaceVariant
+                    when {
+                        vomNutzer -> MaterialTheme.colorScheme.primaryContainer
+                        // Hinweise sind Mitteilungen über Neon, keine Antworten. Sie sollen
+                        // auch so aussehen, sonst hält man sie für eine.
+                        entry.notice -> MaterialTheme.colorScheme.tertiaryContainer
+                        else -> MaterialTheme.colorScheme.surfaceVariant
+                    }
                 )
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
@@ -217,8 +239,11 @@ private fun Blase(entry: ChatEntry) {
                 Text(
                     entry.text.ifBlank { "(leer)" },
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (vomNutzer) MaterialTheme.colorScheme.onPrimaryContainer
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = when {
+                        vomNutzer -> MaterialTheme.colorScheme.onPrimaryContainer
+                        entry.notice -> MaterialTheme.colorScheme.onTertiaryContainer
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                 )
             }
         }

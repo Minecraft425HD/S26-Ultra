@@ -73,6 +73,15 @@ data class ChatEntry(
     val modelId: String? = null,
     val routeReason: String? = null,
     val latencyMs: Long = 0,
+    /**
+     * Eine Mitteilung von Neon über sich selbst, kein Gesprächsbeitrag.
+     *
+     * Etwa der Hinweis, dass das Modell gerade geladen wird. Sichtbar soll er sein — er
+     * erklärt schließlich die Wartezeit —, aber er gehört **nicht** in den Prompt: Ein
+     * Modell, das seine eigenen Statusmeldungen als frühere Antworten vorgesetzt bekommt,
+     * fängt an, sie nachzuahmen.
+     */
+    val notice: Boolean = false,
 )
 
 /**
@@ -115,6 +124,22 @@ class ConversationOrchestrator(
     /** Bekommt jede Zeile des Verlaufs, damit sie einen Neustart überdauern kann. */
     private val onEntry: ((ChatEntry) -> Unit)? = null,
 ) {
+
+    /**
+     * Wie weit das Laden des Modells ist.
+     *
+     * `null`, solange nichts geladen wird. Der Grund für dieses Feld ist ein Fehler, der
+     * hier gemacht wurde: Die Startfrist wurde auf fünfeinhalb Minuten angehoben, ohne dass
+     * in dieser Zeit irgendetwas zu sehen gewesen wäre. Wer nach zwei Minuten aufgab, sah
+     * weder Antwort noch Fehler — und konnte nicht wissen, ob überhaupt etwas passiert.
+     */
+    private val _loading = MutableStateFlow<LoadingStatus?>(null)
+    val loading: StateFlow<LoadingStatus?> = _loading.asStateFlow()
+
+    /** Meldet den Ladefortschritt weiter. Wird vom Container an den Supervisor gehängt. */
+    fun onServerProgress(elapsedMillis: Long, budgetMillis: Long, lastLine: String?) {
+        _loading.value = LoadingStatus(elapsedMillis, budgetMillis, lastLine)
+    }
 
     private val _state = MutableStateFlow(NeonState.GESTOPPT)
     val state: StateFlow<NeonState> = _state.asStateFlow()
@@ -189,7 +214,11 @@ class ConversationOrchestrator(
 
     private fun append(entry: ChatEntry) {
         _transcript.value = _transcript.value + entry
-        onEntry?.invoke(entry)
+
+        // Hinweise werden nicht gespeichert. Ein „das Modell wird geladen" von letzter Woche
+        // hat im Verlauf nichts verloren — und käme beim Wiederherstellen als gewöhnliche
+        // Antwort zurück, also geradewegs in den Prompt.
+        if (!entry.notice) onEntry?.invoke(entry)
     }
 
     /** Spricht nur, wenn dieser Durchgang gesprochen werden soll. */
@@ -207,6 +236,7 @@ class ConversationOrchestrator(
      */
     private fun historyMessages(): List<ChatMessage> =
         _transcript.value
+            .filterNot { it.notice }
             .takeLast(historyLimit)
             .map { ChatMessage(if (it.fromUser) Role.USER else Role.ASSISTANT, it.text) }
 
@@ -367,11 +397,29 @@ class ConversationOrchestrator(
 
         // Nur ansagen, wenn wirklich geladen wird. Liegt das Modell schon im Speicher,
         // waere der Hinweis eine Luege und das Flackern stoerend.
-        if (lifecycle.loadedModelId != selection.model.id) {
+        val laedt = lifecycle.loadedModelId != selection.model.id
+        if (laedt) {
             _state.value = NeonState.MODELL_LAEDT
+            _loading.value = LoadingStatus(0, 0, null)
+
+            // Eine Blase, keine bloße Statuszeile: Sie bleibt im Verlauf stehen und erklärt
+            // auch hinterher noch, warum es so lange gedauert hat.
+            append(
+                ChatEntry(
+                    fromUser = false,
+                    text = "Ich lese das Modell zum ersten Mal von der Platte. Das dauert " +
+                        "auf diesem Gerät etwa eine Minute — danach geht es schnell.",
+                    timestampMillis = clock(),
+                    routeReason = "Hinweis",
+                    notice = true,
+                )
+            )
         }
 
-        when (val loaded = lifecycle.ensureLoaded(selection.model)) {
+        val loadResult = lifecycle.ensureLoaded(selection.model)
+        _loading.value = null
+
+        when (val loaded = loadResult) {
             is ModelLifecycleManager.Result.Ready -> Unit
 
             is ModelLifecycleManager.Result.Missing -> return speakProblem(

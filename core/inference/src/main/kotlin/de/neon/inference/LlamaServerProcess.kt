@@ -22,7 +22,28 @@ interface ServerSupervisor {
     suspend fun clientFor(modelId: String, file: File, projector: File? = null): LlamaServerClient?
 
     suspend fun shutdown()
+
+    /**
+     * Wird während des Ladens regelmäßig gerufen.
+     *
+     * Der Grund ist ein Fehler, der hier gemacht wurde: Die Startfrist wurde von 60 auf 329
+     * Sekunden angehoben, weil 60 zu knapp waren — ohne dafür zu sorgen, dass in dieser Zeit
+     * etwas zu sehen ist. Damit dauerte es fünfeinhalb Minuten, bis ein Fehlschlag überhaupt
+     * sichtbar wurde. Wer nach zwei Minuten aufgibt, sieht in der Zwischenzeit nichts, was
+     * ihm sagt, ob überhaupt etwas passiert.
+     */
+    var onLoadingProgress: ((LoadingProgress) -> Unit)?
+        get() = null
+        set(_) = Unit
 }
+
+/** Wie weit das Laden ist. */
+data class LoadingProgress(
+    val elapsedMillis: Long,
+    val budgetMillis: Long,
+    /** Die letzte aussagekräftige Zeile des Servers, falls es eine gab. */
+    val lastLine: String? = null,
+)
 
 /**
  * Startet und überwacht den mitgelieferten `llama-server` auf dem Telefon.
@@ -74,6 +95,12 @@ class ProcessServerSupervisor(
 
     /** Wann der Server zuletzt etwas ausgegeben hat. Grundlage der Startfrist. */
     private val lastOutputAt = AtomicLong(0)
+
+    /** Die zuletzt gesehene aussagekräftige Zeile — für die Fortschrittsmeldung. */
+    @Volatile
+    private var lastMeaningfulLine: String? = null
+
+    override var onLoadingProgress: ((LoadingProgress) -> Unit)? = null
 
     private val baseUrl: String = "http://127.0.0.1:$port"
 
@@ -179,11 +206,21 @@ class ProcessServerSupervisor(
         thread(name = "neon-llama-log", isDaemon = true) {
             runCatching {
                 process.inputStream.bufferedReader().useLines { lines ->
-                    lines.forEach {
+                    lines.forEach { zeile ->
                         // Jede Zeile ist ein Lebenszeichen. Daran hängt die Startfrist:
-                        // Ein Server, der noch redet, arbeitet noch.
+                        // Ein Server, der noch redet, arbeitet noch. Deshalb zählt hier
+                        // wirklich jede Zeile, auch die belanglosen.
                         lastOutputAt.set(System.currentTimeMillis())
-                        NeonLog.d(TAG, it)
+
+                        if (istAussagekraeftig(zeile)) {
+                            lastMeaningfulLine = zeile.trim()
+                            // Nur das Wesentliche in die Protokolldatei. llama-server
+                            // schreibt in der Voreinstellung hunderte Zeilen beim Laden;
+                            // ungefiltert ertrinkt darin alles, was man später lesen will.
+                            NeonLog.i(TAG, zeile)
+                        } else {
+                            NeonLog.d(TAG, zeile)
+                        }
                     }
                 }
             }
@@ -227,6 +264,15 @@ class ProcessServerSupervisor(
                 NeonLog.i(TAG, "llama-server bereit nach ${System.currentTimeMillis() - begonnen} ms")
                 return true
             }
+
+            val vergangen = System.currentTimeMillis() - begonnen
+            onLoadingProgress?.invoke(
+                LoadingProgress(
+                    elapsedMillis = vergangen,
+                    budgetMillis = budget,
+                    lastLine = lastMeaningfulLine,
+                )
+            )
 
             val stille = System.currentTimeMillis() - lastOutputAt.get()
             if (stille > SILENCE_TIMEOUT_MILLIS) {
@@ -355,6 +401,33 @@ class ProcessServerSupervisor(
          * die Uhr ist genau das, was sich als falsch erwiesen hat.
          */
         const val SILENCE_TIMEOUT_MILLIS = 90_000L
+
+        /**
+         * Ob eine Ausgabezeile in die Protokolldatei gehört.
+         *
+         * `llama-server` läuft mit Verbosität 3 und schreibt beim Laden hunderte Zeilen.
+         * Ungefiltert füllen sie die Datei, verdrängen das Interessante und sprengen jeden
+         * Weg, sie weiterzugeben. Behalten wird, was eine Frage beantwortet: Was wird
+         * geladen, ist es fertig, hört es zu, ging etwas schief.
+         */
+        fun istAussagekraeftig(zeile: String): Boolean {
+            val klein = zeile.lowercase()
+            return MELDENSWERT.any { klein.contains(it) }
+        }
+
+        private val MELDENSWERT = listOf(
+            "load_model",
+            "model loaded",
+            "listening",
+            "error",
+            "failed",
+            "warning: ",
+            "out of memory",
+            "oom",
+            "n_ctx",
+            "kv cache",
+            "kv self",
+        )
 
         /** Die Frist für ein Modell dieser Größe. */
         fun startupBudgetMillis(modelBytes: Long): Long =

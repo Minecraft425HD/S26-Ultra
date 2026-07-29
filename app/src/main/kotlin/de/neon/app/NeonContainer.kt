@@ -284,6 +284,16 @@ class NeonContainer(context: Context) {
     )
 
     init {
+        // Den Ladefortschritt vom Server bis auf den Bildschirm durchreichen. Ohne das
+        // steht bei einem Ladevorgang von einer Minute fünfeinhalb Minuten lang nichts da.
+        serverSupervisor.onLoadingProgress = { fortschritt ->
+            orchestrator.onServerProgress(
+                elapsedMillis = fortschritt.elapsedMillis,
+                budgetMillis = fortschritt.budgetMillis,
+                lastLine = fortschritt.lastLine,
+            )
+        }
+
         // Den gespeicherten Verlauf zurückholen. Ohne das begänne jedes Gespräch bei null,
         // und der Chat wäre nach jedem Schließen der App leer.
         scope.launch {

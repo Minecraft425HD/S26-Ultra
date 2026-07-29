@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Welche Verzeichnisse über den FileProvider geteilt werden dürfen.
+
+  Nur der Cache-Ordner "geteilt": Dorthin schreibt Neon eine Kopie des Protokolls, bevor es
+  weitergegeben wird. Das Datenverzeichnis selbst bleibt außen vor — dort liegen das
+  Gedächtnis und die Modelle.
+-->
+<paths>
+    <cache-path name="geteilt" path="geteilt/" />
+</paths>

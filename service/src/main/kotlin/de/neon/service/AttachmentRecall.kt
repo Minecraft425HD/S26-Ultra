@@ -24,3 +24,17 @@ data class AttachmentExcerpt(
 fun interface AttachmentRecall {
     suspend fun recall(query: String, limit: Int): List<AttachmentExcerpt>
 }
+
+/**
+ * Wie weit das Laden eines Modells ist.
+ *
+ * Auf dem Bildschirm wird daraus eine mitlaufende Zahl. Der Unterschied zwischen „arbeitet
+ * noch" und „hängt" lässt sich sonst nicht sehen — und genau daran scheitert die Geduld,
+ * wenn ein Ladevorgang eine Minute dauert und die Frist fünfeinhalb.
+ */
+data class LoadingStatus(
+    val elapsedMillis: Long,
+    val budgetMillis: Long,
+    /** Die letzte aussagekräftige Zeile des Servers, falls es eine gab. */
+    val lastLine: String? = null,
+)

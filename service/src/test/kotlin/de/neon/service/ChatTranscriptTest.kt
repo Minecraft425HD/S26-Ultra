@@ -115,7 +115,9 @@ class ChatTranscriptTest {
 
         orchestrator.handleText("wie hoch ist der kölner dom")
 
-        val verlauf = orchestrator.transcript.value
+        // Hinweise ausgeklammert: Der Ladehinweis ist eine Mitteilung über Neon, kein
+        // Gesprächsbeitrag — er steht im Verlauf, zählt aber nicht als Wechselrede.
+        val verlauf = orchestrator.transcript.value.filterNot { it.notice }
         assertEquals(2, verlauf.size, "erwartet Frage und Antwort: $verlauf")
         assertTrue(verlauf[0].fromUser)
         assertEquals("wie hoch ist der kölner dom", verlauf[0].text)
@@ -208,7 +210,7 @@ class ChatTranscriptTest {
 
         orchestrator.handleText("heutige frage")
 
-        assertEquals(4, orchestrator.transcript.value.size)
+        assertEquals(4, orchestrator.transcript.value.count { !it.notice })
         val texte = assertNotNull(engine.letzteAnfrage).messages.map { it.content }
         assertTrue(texte.any { it == "frage von gestern" }, "Prompt: $texte")
     }
@@ -220,9 +222,33 @@ class ChatTranscriptTest {
 
         orchestrator.handleText("frage")
 
-        assertEquals(2, gemeldet.size, "gemeldet: $gemeldet")
-        assertTrue(gemeldet[0].fromUser)
-        assertTrue(!gemeldet[1].fromUser)
+        val ohneHinweise = gemeldet.filterNot { it.notice }
+        assertEquals(2, ohneHinweise.size, "gemeldet: $gemeldet")
+        assertTrue(ohneHinweise[0].fromUser)
+        assertTrue(!ohneHinweise[1].fromUser)
+    }
+
+    @Test
+    fun `Hinweise werden weder gespeichert noch dem Modell vorgelegt`() = runTest {
+        // Beides wäre falsch, aber unterschiedlich falsch: Gespeichert kämen sie beim
+        // nächsten Start als gewöhnliche Antworten zurück; im Prompt brächten sie ein
+        // kleines Modell dazu, eigene Statusmeldungen zu erfinden.
+        val gemeldet = mutableListOf<ChatEntry>()
+        val engine = AntwortendeEngine(listOf("Antwort."))
+        val orchestrator = bauen(engine, onEntry = { gemeldet += it })
+
+        orchestrator.handleText("erste frage")
+
+        val hinweise = orchestrator.transcript.value.filter { it.notice }
+        assertTrue(hinweise.isNotEmpty(), "der Ladehinweis fehlt ganz")
+        assertTrue(gemeldet.none { it.notice }, "ein Hinweis wurde gespeichert: $gemeldet")
+
+        orchestrator.handleText("zweite frage")
+        val texte = assertNotNull(engine.letzteAnfrage).messages.map { it.content }
+        assertTrue(
+            texte.none { it.contains("von der Platte") },
+            "ein Hinweis steht im Prompt:\n" + texte.joinToString("\n"),
+        )
     }
 
     @Test
