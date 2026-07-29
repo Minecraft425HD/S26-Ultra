@@ -1,6 +1,11 @@
 package de.neon.memory
 
+import de.neon.attachments.AttachmentChunk
+import de.neon.attachments.ChunkRanker
+import de.neon.attachments.IndexedChunk
+import de.neon.attachments.RankedChunk
 import de.neon.router.EmbeddingProvider
+import de.neon.router.HashingEmbeddingProvider
 import de.neon.router.LabeledExample
 import de.neon.router.TaskCategory
 import kotlinx.coroutines.CoroutineDispatcher
@@ -178,5 +183,91 @@ class ChatHistoryRepository(
 
         /** Obergrenze auf der Platte. Bei ein paar hundert Zeilen sind das wenige hundert KB. */
         const val MAX_ENTRIES = 1_000
+    }
+}
+
+/**
+ * Die Anhänge auf der Platte, durchsuchbar.
+ *
+ * Nach demselben Muster wie [MemoryRepository] — und aus demselben Grund: Was in den Prompt
+ * gehört, entscheidet sich zur Frage, nicht beim Anhängen. Der Unterschied ist die Menge.
+ * Ein Gedächtnis hat ein paar hundert Sätze, ein angehängtes Projektverzeichnis leicht
+ * einige tausend Abschnitte.
+ */
+class AttachmentRepository(
+    private val dao: AttachmentChunkDao,
+    private val embeddings: EmbeddingProvider,
+    private val ranker: ChunkRanker = ChunkRanker(embeddings),
+    private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val clock: () -> Long = System::currentTimeMillis,
+) {
+
+    /** Legt die Abschnitte einer Aufnahme ab. Der Aufrufer hat schon zerlegt. */
+    suspend fun add(chunks: List<AttachmentChunk>) = withContext(dispatcher) {
+        if (chunks.isEmpty()) return@withContext
+        runCatching {
+            val now = clock()
+            dao.insertAll(
+                chunks.map {
+                    AttachmentChunkEntity(
+                        fileName = it.fileName,
+                        filePath = it.filePath,
+                        firstLine = it.firstLine,
+                        lastLine = it.lastLine,
+                        text = it.text,
+                        embedding = embeddings.embed(it.text),
+                        addedAtMillis = now,
+                    )
+                }
+            )
+        }
+        Unit
+    }
+
+    /**
+     * Die Stellen, die zur Frage passen.
+     *
+     * Die lineare Suche über alle Abschnitte ist bewusst: Bei einigen tausend Einträgen sind
+     * das wenige Millisekunden, und die Alternative wäre eine Vektordatenbank für ein
+     * Problem, das ein Telefon mit einem angehängten Ordner nicht hat.
+     */
+    suspend fun recall(query: String, limit: Int): List<RankedChunk> = withContext(dispatcher) {
+        runCatching {
+            val alle = dao.all().map {
+                IndexedChunk(
+                    chunk = AttachmentChunk(
+                        fileName = it.fileName,
+                        filePath = it.filePath,
+                        firstLine = it.firstLine,
+                        lastLine = it.lastLine,
+                        text = it.text,
+                    ),
+                    embedding = it.embedding,
+                )
+            }
+            // Vektoren aus einer früheren Fassung des Einbetters haben eine andere Länge und
+            // würden die Ähnlichkeit auf null ziehen. Lieber überspringen als danebenliegen.
+            val passend = alle.filter { it.embedding.size == HashingEmbeddingProvider.DEFAULT_DIMENSIONS }
+            ranker.rank(query, passend, limit)
+        }.getOrDefault(emptyList())
+    }
+
+    /** Welche Dateien gerade angehängt sind — für die Oberfläche. */
+    suspend fun paths(): List<String> = withContext(dispatcher) {
+        runCatching { dao.paths() }.getOrDefault(emptyList())
+    }
+
+    suspend fun chunkCount(): Int = withContext(dispatcher) {
+        runCatching { dao.count() }.getOrDefault(0)
+    }
+
+    suspend fun remove(path: String) = withContext(dispatcher) {
+        runCatching { dao.deletePath(path) }
+        Unit
+    }
+
+    suspend fun clear() = withContext(dispatcher) {
+        runCatching { dao.clear() }
+        Unit
     }
 }

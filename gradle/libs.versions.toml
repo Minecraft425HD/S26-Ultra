@@ -48,6 +48,8 @@ androidx-room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
 androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
 androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "securityCrypto" }
+# Für Ordnerbäume aus der Systemauswahl. Ohne das gäbe es nur einzelne Dateien.
+androidx-documentfile = { module = "androidx.documentfile:documentfile", version = "1.0.1" }
 
 onnxruntime-android = { module = "com.microsoft.onnxruntime:onnxruntime-android", version.ref = "onnxruntime" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }

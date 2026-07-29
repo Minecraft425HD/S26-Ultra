@@ -87,6 +87,13 @@ class ConversationOrchestrator(
     private val tools: ToolRegistry? = null,
     /** Was Neon sich über den Nutzer gemerkt hat. */
     private val memory: MemoryRecall? = null,
+    /**
+     * Sucht in den angehängten Dateien die Stellen, die zur Frage passen.
+     *
+     * Der Kern der Entscheidung, Anhänge nicht dauerhaft im Kontext zu halten: Gefragt wird
+     * erst, wenn die Frage feststeht — dann geht nur das Passende in den Prompt.
+     */
+    private val attachments: AttachmentRecall? = null,
     /** Wertet den Verlauf aus und füttert damit Stufe 1 des Routers. */
     private val learner: TurnLearner? = null,
     /**
@@ -105,6 +112,15 @@ class ConversationOrchestrator(
 
     private val _lastTurn = MutableStateFlow<TurnReport?>(null)
     val lastTurn: StateFlow<TurnReport?> = _lastTurn.asStateFlow()
+
+    /**
+     * Welche Fundstellen die letzte Antwort benutzt hat.
+     *
+     * Sichtbar zu machen, was in den Prompt ging, ist der Unterschied zwischen einer
+     * Antwort, der man glauben muss, und einer, die man nachschlagen kann.
+     */
+    private val _lastSources = MutableStateFlow<List<String>>(emptyList())
+    val lastSources: StateFlow<List<String>> = _lastSources.asStateFlow()
 
     /** Der sichtbare Gesprächsverlauf, älteste Zeile zuerst. */
     private val _transcript = MutableStateFlow<List<ChatEntry>>(emptyList())
@@ -372,6 +388,12 @@ class ConversationOrchestrator(
             runCatching { it.recall(utterance.text, MEMORY_CONTEXT_LIMIT) }.getOrDefault(emptyList())
         } ?: emptyList()
 
+        val attachmentContext = attachments?.let {
+            runCatching { it.recall(utterance.text, ATTACHMENT_CONTEXT_LIMIT) }
+                .getOrDefault(emptyList())
+        } ?: emptyList()
+        _lastSources.value = attachmentContext.map { it.source }
+
         // Werkzeuge kommen nur ins Spiel, wenn eine Handlung gefragt ist. Sie immer
         // anzubieten würde den Prompt aufblähen und kleine Modelle dazu verleiten, auch
         // Wissensfragen als Werkzeugaufruf zu beantworten.
@@ -393,7 +415,11 @@ class ConversationOrchestrator(
                     add(
                         ChatMessage(
                             Role.SYSTEM,
-                            NeonPrompts.systemPrompt(memoryContext, spoken = speakThisTurn),
+                            NeonPrompts.systemPrompt(
+                                memoryContext = memoryContext,
+                                spoken = speakThisTurn,
+                                attachmentContext = attachmentContext.map { it.asPromptBlock() },
+                            ),
                         )
                     )
                     addAll(turnHistory)
@@ -572,6 +598,16 @@ class ConversationOrchestrator(
 
         /** Drei Wechselreden. Genug für Rückbezüge, wenig genug, um nicht abzulenken. */
         const val DEFAULT_HISTORY_LIMIT = 6
+
+        /**
+         * So viele Fundstellen gehen höchstens in den Prompt.
+         *
+         * Fünf Abschnitte à rund 400 Wörter sind grob 2700 Token — bei einem Fenster von
+         * 16384 gut ein Sechstel. Mehr Stellen bringen selten mehr Antwort, kosten aber
+         * sicher mehr Zeit, und ab einer gewissen Menge verliert ein kleines Modell den
+         * Faden zwischen den Auszügen.
+         */
+        const val ATTACHMENT_CONTEXT_LIMIT = 5
 
         /** Ein Werkzeugaufruf ist kurz; die Grenze schützt vor einem entgleisten Modell. */
         const val TOOL_CALL_MAX_TOKENS = 128

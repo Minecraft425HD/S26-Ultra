@@ -26,6 +26,9 @@ rootProject.name = "Neon"
 // Entscheidungslogik des Routers.
 include(":core:router")
 
+// Ebenfalls reines Kotlin/JVM: Anhänge zerlegen, erkennen und bewerten.
+include(":core:attachments")
+
 // Android-Module.
 include(":app")
 include(":service")

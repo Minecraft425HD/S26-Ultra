@@ -132,6 +132,37 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Einzelne Dateien anhängen.
+     *
+     * Alle Typen zur Auswahl: Was lesbar ist, entscheidet sich am Inhalt und nicht an einem
+     * MIME-Typ, den der Anbieter oft ohnehin nur rät.
+     */
+    private val pickAttachments = registerForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        val container = container ?: return@registerForActivityResult
+        if (uris.isEmpty()) return@registerForActivityResult
+        container.addAttachments(uris.mapNotNull { AndroidSources.fromDocument(this, it) })
+    }
+
+    /** Einen ganzen Ordner anhängen, rekursiv. */
+    private val pickFolder = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        val container = container ?: return@registerForActivityResult
+        if (uri == null) return@registerForActivityResult
+        // Ohne diese Berechtigung darf nur gelesen werden, solange die Auswahl offen ist —
+        // die Aufnahme läuft aber im Hintergrund weiter.
+        runCatching {
+            contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        }
+        container.addAttachments(AndroidSources.fromTree(this, uri))
+    }
+
     private val requestPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { granted ->
@@ -147,6 +178,10 @@ class MainActivity : ComponentActivity() {
         // vom Container brauchen — sonst stürbe er am selben Fehler, den er anzeigen soll.
         val crash = runCatching { app.crashReporter.lastCrash() }.getOrNull()
         val failure = app.startupFailure
+
+        // Was beim letzten Mal angehängt wurde, liegt in der Datenbank und soll auch nach
+        // einem Neustart sichtbar sein.
+        container?.refreshAttachments()
 
         setContent {
             MaterialTheme {
@@ -195,6 +230,11 @@ class MainActivity : ComponentActivity() {
                                     busy = state != NeonState.GESTOPPT && state != NeonState.LAUSCHEN,
                                     speakAnswers = speakTypedAnswers,
                                     onSpeakAnswers = { speakTypedAnswers = it },
+                                    attachments = ready.attachmentState.collectAsState().value,
+                                    sources = ready.orchestrator.lastSources.collectAsState().value,
+                                    onPickFiles = { pickAttachments.launch(arrayOf("*/*")) },
+                                    onPickFolder = { pickFolder.launch(null) },
+                                    onClearAttachments = { ready.clearAttachments() },
                                     onSend = { text -> sendText(ready, text) },
                                     onSpeak = { withPermissions { NeonForegroundService.trigger(this) } },
                                     onShowDiagnostics = { zeigeDiagnose = true },

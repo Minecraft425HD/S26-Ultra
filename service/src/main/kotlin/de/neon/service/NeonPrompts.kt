@@ -20,6 +20,7 @@ object NeonPrompts {
         memoryContext: List<String> = emptyList(),
         toolDescription: String? = null,
         spoken: Boolean = true,
+        attachmentContext: List<String> = emptyList(),
     ): String = buildString {
         appendLine("Du bist Neon, ein Sprachassistent auf einem Android-Telefon.")
         appendLine()
@@ -45,6 +46,24 @@ object NeonPrompts {
             appendLine()
             appendLine("Das weißt du über den Nutzer:")
             memoryContext.forEach { appendLine("- $it") }
+        }
+
+        // Die Fundstellen aus den Anhängen. Die Anweisungen davor sind kein Beiwerk: Ein
+        // kleines Modell nimmt Zusammenhänge, die im Prompt stehen, sonst gern als eigenes
+        // Wissen und erfindet den Rest dazu — mitsamt einer Quellenangabe, die stimmt.
+        if (attachmentContext.isNotEmpty()) {
+            appendLine()
+            appendLine("Aus den angehängten Dateien, jeweils mit Fundstelle:")
+            attachmentContext.forEach {
+                appendLine()
+                appendLine(it)
+            }
+            appendLine()
+            appendLine("Dazu gilt:")
+            appendLine("- Beantworte die Frage aus diesen Stellen, wenn sie dort steht.")
+            appendLine("- Nenne die Datei, aus der du es hast.")
+            appendLine("- Steht die Antwort nicht darin, sage das. Erfinde nichts dazu.")
+            appendLine("- Es sind Ausschnitte. Es kann sein, dass du nicht alles siehst.")
         }
 
         if (!toolDescription.isNullOrBlank()) {

@@ -16,6 +16,10 @@ import de.neon.inference.LocalRouterLlm
 import de.neon.inference.ModelLifecycleManager
 import de.neon.inference.ModelStore
 import de.neon.inference.ProcessServerSupervisor
+import de.neon.attachments.AttachmentIngest
+import de.neon.attachments.AttachmentKind
+import de.neon.attachments.IngestResult
+import de.neon.memory.AttachmentRepository
 import de.neon.memory.ChatHistoryRepository
 import de.neon.memory.MemoryRepository
 import de.neon.memory.NeonDatabase
@@ -31,6 +35,7 @@ import de.neon.router.Router
 import de.neon.router.RouterStats
 import de.neon.router.SeedExamples
 import de.neon.router.SelectionPolicy
+import de.neon.service.AttachmentExcerpt
 import de.neon.service.ConversationOrchestrator
 import de.neon.service.NeonForegroundService
 import de.neon.service.TurnLearner
@@ -44,6 +49,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -143,6 +149,11 @@ class NeonContainer(context: Context) {
 
     private val chatHistory by lazy { ChatHistoryRepository(database.chatEntries()) }
 
+    private val attachments by lazy { AttachmentRepository(database.attachmentChunks(), embeddings) }
+
+    /** Der Zustand der Anhänge für die Oberfläche. */
+    val attachmentState = MutableStateFlow(AttachmentState())
+
     /**
      * Lebt so lange wie die Anwendung.
      *
@@ -204,6 +215,13 @@ class NeonContainer(context: Context) {
         memory = { query, limit ->
             runCatching { memory.recall(query, limit) }.getOrDefault(emptyList())
         },
+        attachments = { query, limit ->
+            runCatching {
+                attachments.recall(query, limit).map {
+                    AttachmentExcerpt(source = it.chunk.quelle, text = it.chunk.text)
+                }
+            }.getOrDefault(emptyList())
+        },
         learner = learner,
         // Jede Zeile wandert auf die Platte, damit der Verlauf einen Neustart überlebt.
         // Im Hintergrund: Eine hakende Datenbank darf das Gespräch nicht aufhalten.
@@ -223,6 +241,76 @@ class NeonContainer(context: Context) {
                 val entries = chatHistory.recent().map { it.toEntry() }
                 if (entries.isNotEmpty()) orchestrator.restoreTranscript(entries)
             }.onFailure { NeonLog.e(TAG, "Verlauf nicht ladbar", it) }
+        }
+    }
+
+    /**
+     * Nimmt Anhänge auf: erkennen, auspacken, zerlegen, einbetten, ablegen.
+     *
+     * Läuft im Hintergrund und meldet den Fortschritt, weil ein Ordner mit ein paar hundert
+     * Dateien durchaus einige Sekunden braucht — und eine Oberfläche, die dabei nur steht,
+     * sieht aus wie abgestürzt.
+     */
+    fun addAttachments(sources: List<de.neon.attachments.AttachmentSource>) {
+        if (sources.isEmpty()) return
+        scope.launch {
+            attachmentState.value = attachmentState.value.copy(busy = true, message = null)
+            runCatching {
+                val ergebnis = AttachmentIngest().ingest(sources)
+                attachments.add(ergebnis.chunks)
+                ergebnis
+            }.onSuccess { ergebnis ->
+                attachmentState.value = AttachmentState(
+                    busy = false,
+                    files = attachments.paths(),
+                    chunkCount = attachments.chunkCount(),
+                    message = zusammenfassung(ergebnis),
+                )
+            }.onFailure {
+                NeonLog.e(TAG, "Anhänge nicht aufnehmbar", it)
+                attachmentState.value = attachmentState.value.copy(
+                    busy = false,
+                    message = "Fehlgeschlagen: ${it.message}",
+                )
+            }
+        }
+    }
+
+    /**
+     * Was aufgenommen wurde, in einem Satz.
+     *
+     * Übersprungenes wird ausdrücklich genannt. Stillschweigend die Hälfte wegzulassen wäre
+     * die unangenehmste Art von Fehler: Man fragt etwas, bekommt "steht da nicht" und hat
+     * keine Ahnung, dass die Datei nie gelesen wurde.
+     */
+    private fun zusammenfassung(ergebnis: IngestResult): String = buildString {
+        append("${ergebnis.textFileCount} Dateien gelesen, ${ergebnis.chunks.size} Abschnitte")
+        val binaer = ergebnis.files.count { it.kind == AttachmentKind.BINAER }
+        if (binaer > 0) append(", $binaer nicht lesbar")
+        if (ergebnis.skippedCount > 0) append(", ${ergebnis.skippedCount} übersprungen")
+        append(".")
+
+        ergebnis.files
+            .filter { it.kind == AttachmentKind.UEBERSPRUNGEN }
+            .take(3)
+            .forEach { append("\n${it.name}: ${it.note}") }
+    }
+
+    fun clearAttachments() {
+        scope.launch {
+            runCatching { attachments.clear() }
+            attachmentState.value = AttachmentState()
+        }
+    }
+
+    fun refreshAttachments() {
+        scope.launch {
+            runCatching {
+                attachmentState.value = AttachmentState(
+                    files = attachments.paths(),
+                    chunkCount = attachments.chunkCount(),
+                )
+            }
         }
     }
 

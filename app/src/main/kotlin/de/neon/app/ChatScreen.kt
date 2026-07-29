@@ -9,10 +9,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -56,6 +59,11 @@ fun ChatScreen(
     busy: Boolean,
     speakAnswers: Boolean,
     onSpeakAnswers: (Boolean) -> Unit,
+    attachments: AttachmentState,
+    sources: List<String>,
+    onPickFiles: () -> Unit,
+    onPickFolder: () -> Unit,
+    onClearAttachments: () -> Unit,
     onSend: (String) -> Unit,
     onSpeak: () -> Unit,
     onShowDiagnostics: () -> Unit,
@@ -111,6 +119,14 @@ fun ChatScreen(
                 Text(beschreibe(state), style = MaterialTheme.typography.bodySmall)
             }
         }
+
+        Anhaenge(
+            state = attachments,
+            sources = sources,
+            onPickFiles = onPickFiles,
+            onPickFolder = onPickFolder,
+            onClear = onClearAttachments,
+        )
 
         HorizontalDivider()
         Eingabe(
@@ -220,6 +236,92 @@ private fun Blase(entry: ChatEntry) {
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(top = 2.dp, start = 4.dp, end = 4.dp),
             )
+        }
+    }
+}
+
+/**
+ * Die Anhänge: was dran ist, was zuletzt benutzt wurde, und wie man welche hinzufügt.
+ *
+ * Beides sichtbar zu machen — das Angehängte *und* die tatsächlich benutzten Fundstellen —
+ * ist der Unterschied zwischen einem Assistenten, dem man glauben muss, und einem, den man
+ * nachprüfen kann. Gerade weil nur ein Bruchteil der Dateien in den Prompt geht, darf nicht
+ * im Dunkeln bleiben, welcher.
+ */
+@Composable
+private fun Anhaenge(
+    state: AttachmentState,
+    sources: List<String>,
+    onPickFiles: () -> Unit,
+    onPickFolder: () -> Unit,
+    onClear: () -> Unit,
+) {
+    var offen by remember { mutableStateOf(false) }
+
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            TextButton(onClick = { offen = !offen }) {
+                Text(
+                    when {
+                        state.busy -> "Nehme Anhänge auf …"
+                        state.files.isEmpty() -> "Anhängen"
+                        else -> "${'$'}{state.files.size} Dateien angehängt"
+                    }
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            if (sources.isNotEmpty()) {
+                Text(
+                    "benutzt: ${'$'}{sources.size}",
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        }
+
+        if (offen) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onPickFiles, enabled = !state.busy) { Text("Dateien") }
+                OutlinedButton(onClick = onPickFolder, enabled = !state.busy) { Text("Ordner") }
+                if (state.files.isNotEmpty()) {
+                    TextButton(onClick = onClear, enabled = !state.busy) { Text("Alle entfernen") }
+                }
+            }
+
+            state.message?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+            }
+
+            if (state.files.isNotEmpty()) {
+                Text(
+                    "${'$'}{state.chunkCount} durchsuchbare Abschnitte",
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 140.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    state.files.forEach {
+                        Text(it, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+
+            if (sources.isNotEmpty()) {
+                Text(
+                    "Zuletzt benutzte Stellen:",
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                sources.forEach {
+                    Text(it, style = MaterialTheme.typography.bodySmall)
+                }
+            }
         }
     }
 }

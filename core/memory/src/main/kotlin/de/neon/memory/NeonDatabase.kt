@@ -121,6 +121,52 @@ interface ChatEntryDao {
     suspend fun trimTo(keep: Int)
 }
 
+/**
+ * Ein Abschnitt eines Anhangs, durchsuchbar abgelegt.
+ *
+ * Hier liegt der Kern der Entscheidung, Anhänge **nicht** dauerhaft im Kontext zu halten:
+ * Der Text steht in der Datenbank, und in den Prompt geht nur, was zur Frage passt. Ohne
+ * das wäre ein einziges Projektverzeichnis größer als jedes Kontextfenster.
+ */
+@Entity(tableName = "attachment_chunks")
+data class AttachmentChunkEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val fileName: String,
+    val filePath: String,
+    val firstLine: Int,
+    val lastLine: Int,
+    val text: String,
+    val embedding: FloatArray,
+    val addedAtMillis: Long,
+) {
+    override fun equals(other: Any?): Boolean =
+        this === other || (other is AttachmentChunkEntity && other.id == id)
+
+    override fun hashCode(): Int = id.hashCode()
+}
+
+@Dao
+interface AttachmentChunkDao {
+
+    @Insert
+    suspend fun insertAll(chunks: List<AttachmentChunkEntity>)
+
+    @Query("SELECT * FROM attachment_chunks")
+    suspend fun all(): List<AttachmentChunkEntity>
+
+    @Query("SELECT DISTINCT filePath FROM attachment_chunks")
+    suspend fun paths(): List<String>
+
+    @Query("SELECT COUNT(*) FROM attachment_chunks")
+    suspend fun count(): Int
+
+    @Query("DELETE FROM attachment_chunks WHERE filePath = :path")
+    suspend fun deletePath(path: String)
+
+    @Query("DELETE FROM attachment_chunks")
+    suspend fun clear()
+}
+
 /** Speichert Vektoren als kompaktes Byte-Feld statt als Text. */
 class FloatArrayConverter {
 
@@ -198,8 +244,9 @@ interface MemoryFactDao {
         RoutingExampleEntity::class,
         MemoryFactEntity::class,
         ChatEntryEntity::class,
+        AttachmentChunkEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 @TypeConverters(FloatArrayConverter::class)
@@ -209,6 +256,7 @@ abstract class NeonDatabase : RoomDatabase() {
     abstract fun routingExamples(): RoutingExampleDao
     abstract fun memoryFacts(): MemoryFactDao
     abstract fun chatEntries(): ChatEntryDao
+    abstract fun attachmentChunks(): AttachmentChunkDao
 
     companion object {
 
@@ -244,11 +292,29 @@ abstract class NeonDatabase : RoomDatabase() {
             }
         }
 
+        /** Gilt derselbe Grundsatz wie für [CREATE_CHAT_ENTRIES]: Spalte für Spalte wie Room. */
+        const val CREATE_ATTACHMENT_CHUNKS =
+            "CREATE TABLE IF NOT EXISTS `attachment_chunks` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`fileName` TEXT NOT NULL, " +
+                "`filePath` TEXT NOT NULL, " +
+                "`firstLine` INTEGER NOT NULL, " +
+                "`lastLine` INTEGER NOT NULL, " +
+                "`text` TEXT NOT NULL, " +
+                "`embedding` BLOB NOT NULL, " +
+                "`addedAtMillis` INTEGER NOT NULL)"
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(CREATE_ATTACHMENT_CHUNKS)
+            }
+        }
+
         fun create(context: Context): NeonDatabase =
             Room.databaseBuilder(
                 context.applicationContext,
                 NeonDatabase::class.java,
                 "neon.db",
-            ).addMigrations(MIGRATION_1_2).build()
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
     }
 }

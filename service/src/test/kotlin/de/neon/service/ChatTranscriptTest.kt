@@ -78,6 +78,7 @@ class ChatTranscriptTest {
         tts: TtsEngine = MitschreibendeTts(),
         asr: AsrEngine = StummeAsr(Transcript("gesprochene frage", 0.9f, "de-DE")),
         onEntry: ((ChatEntry) -> Unit)? = null,
+        attachments: AttachmentRecall? = null,
     ): ConversationOrchestrator {
         val router = Router(
             registry = registry,
@@ -103,6 +104,7 @@ class ChatTranscriptTest {
             outcomeStore = InMemoryRouteOutcomeStore(),
             clock = { 0L },
             onEntry = onEntry,
+            attachments = attachments,
         )
     }
 
@@ -252,6 +254,58 @@ class ChatTranscriptTest {
         orchestrator.onIdle()
         orchestrator.handleText("noch eine frage")
         assertEquals(NeonState.LAUSCHEN, orchestrator.state.value)
+    }
+
+    @Test
+    fun `Fundstellen aus Anhaengen gehen mit Quellenangabe in den Prompt`() = runTest {
+        val engine = AntwortendeEngine(listOf("Antwort."))
+        val orchestrator = bauen(
+            engine,
+            attachments = { _, _ ->
+                listOf(
+                    AttachmentExcerpt("notizen/urlaub.txt:1-3", "Flug nach Lissabon am 14. September."),
+                )
+            },
+        )
+
+        orchestrator.handleText("wann geht mein flug")
+
+        val system = assertNotNull(engine.letzteAnfrage).messages.first().content
+        assertTrue(system.contains("notizen/urlaub.txt:1-3"), "Quellenangabe fehlt:\n" + system)
+        assertTrue(system.contains("Lissabon"), "der Auszug fehlt:\n" + system)
+        // Ohne diese Anweisung nimmt ein kleines Modell den Auszug als eigenes Wissen und
+        // dichtet den Rest dazu — mitsamt einer Quellenangabe, die dann stimmt.
+        assertTrue(system.contains("Erfinde nichts dazu"), "die Warnung fehlt:\n" + system)
+    }
+
+    @Test
+    fun `die benutzten Fundstellen sind danach ablesbar`() = runTest {
+        val orchestrator = bauen(
+            AntwortendeEngine(listOf("Antwort.")),
+            attachments = { _, _ -> listOf(AttachmentExcerpt("a/b.txt:5-9", "inhalt")) },
+        )
+
+        orchestrator.handleText("frage")
+        assertEquals(listOf("a/b.txt:5-9"), orchestrator.lastSources.value)
+    }
+
+    @Test
+    fun `ohne Anhaenge bleibt der Prompt unveraendert`() = runTest {
+        val engine = AntwortendeEngine(listOf("Antwort."))
+        bauen(engine, attachments = { _, _ -> emptyList() }).handleText("frage")
+
+        val system = assertNotNull(engine.letzteAnfrage).messages.first().content
+        assertTrue(!system.contains("angehängten Dateien"), "leerer Anhangsblock im Prompt:\n" + system)
+    }
+
+    @Test
+    fun `ein Fehler beim Suchen bricht den Durchgang nicht ab`() = runTest {
+        // Eine unlesbare Datenbank darf höchstens die Fundstellen kosten, nicht die Antwort.
+        val engine = AntwortendeEngine(listOf("Antwort."))
+        val orchestrator = bauen(engine, attachments = { _, _ -> error("Datenbank kaputt") })
+
+        val bericht = orchestrator.handleText("frage")
+        assertEquals("Antwort.", bericht?.answer)
     }
 
     @Test
