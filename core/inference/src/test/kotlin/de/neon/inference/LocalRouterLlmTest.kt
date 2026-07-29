@@ -29,7 +29,7 @@ class LocalRouterLlmTest {
         var loadCount = 0
         var unloadCount = 0
 
-        override suspend fun load(model: ModelSpec, file: File): Boolean {
+        override suspend fun load(model: ModelSpec, file: File, projector: File?): Boolean {
             loadCount++
             loadedModelId = model.id
             return true

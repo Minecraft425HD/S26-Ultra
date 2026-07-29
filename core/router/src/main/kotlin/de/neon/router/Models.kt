@@ -62,7 +62,19 @@ data class ModelSpec(
     val energyPerToken: Double,
     /** Darf dieses Modell dauerhaft im Speicher bleiben? */
     val residentByDefault: Boolean = false,
+    /**
+     * Kennung der Projektordatei, falls das Modell eine braucht.
+     *
+     * Bildmodelle bestehen in llama.cpp aus **zwei** Dateien: den Gewichten und einem
+     * Projektor, der Bildkacheln in den Raum des Sprachmodells übersetzt. Ohne die zweite
+     * startet der Server zwar, kann aber keine Bilder ansehen — ein Fehler, der sich sonst
+     * erst zeigt, wenn jemand ein Bild anhängt und eine ratlose Antwort bekommt.
+     */
+    val projectorFileName: String? = null,
 ) {
+
+    /** Ob dieses Modell ohne eine zweite Datei unvollständig wäre. */
+    val needsProjector: Boolean get() = projectorFileName != null
     init {
         require(minComplexity <= maxComplexity) {
             "$id: minComplexity ($minComplexity) darf nicht über maxComplexity ($maxComplexity) liegen"
@@ -192,16 +204,27 @@ class ModelRegistry(models: List<ModelSpec>) {
                     energyPerToken = 2.1,
                 ),
                 ModelSpec(
-                    id = "gemma-3n-e4b",
-                    displayName = "Gemma 3n E4B (Bild)",
+                    // Hier stand Gemma 3n. Das war eine Fehlbesetzung: Für Gemma 3n gibt
+                    // es keine Projektordatei, ohne die llama.cpp gar keine Bilder
+                    // verarbeitet — die Registry benannte also ein Bildmodell, mit dem
+                    // Bilder unmöglich waren. Gemma 3 4B bringt beide Dateien mit und ist
+                    // in llama.cpp gut abgehangen.
+                    id = "gemma-3-4b-it",
+                    displayName = "Gemma 3 4B (Bild)",
                     role = ModelRole.VISION,
-                    sizeBytes = 3 * GB,
+                    // Modell und Projektor zusammen: 2,32 GB plus 0,79 GB.
+                    sizeBytes = (3.11 * GB).toLong(),
                     capabilities = setOf(Capability.TEXT, Capability.VISION),
                     strengths = setOf(TaskCategory.BILD),
                     maxComplexity = 4,
                     tokensPerSecond = 15.0,
                     loadCostMillis = 2_600,
                     energyPerToken = 1.6,
+                    /**
+                     * Ohne diese Datei kann das Modell keine Bilder ansehen. Sie wird
+                     * getrennt importiert und getrennt vorgehalten.
+                     */
+                    projectorFileName = "mmproj",
                 ),
             )
         )

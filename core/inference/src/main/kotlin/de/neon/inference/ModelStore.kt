@@ -43,7 +43,30 @@ class ModelStore(private val root: File) : ModelFileResolver {
     override fun fileFor(model: ModelSpec): File? =
         File(root, "${model.id}.gguf").takeIf { it.isFile && it.length() > 0 }
 
-    fun isAvailable(model: ModelSpec): Boolean = fileFor(model) != null
+    /**
+     * Die Projektordatei eines Bildmodells, falls vorhanden.
+     *
+     * Getrennt gehalten, weil sie getrennt importiert wird: zwei Dateien von zwei Links,
+     * und dazwischen kann jemand die App schließen.
+     */
+    override fun projectorFor(model: ModelSpec): File? {
+        if (!model.needsProjector) return null
+        return File(root, "${projectorId(model.id)}.gguf").takeIf { it.isFile && it.length() > 0 }
+    }
+
+    /**
+     * Ob das Modell benutzbar ist.
+     *
+     * Bei einem Bildmodell heißt das: **beide** Dateien. Nur die Gewichte zu haben wäre die
+     * unangenehmere Hälfte — der Server startet, und erst die Bildfrage geht daneben.
+     */
+    fun isAvailable(model: ModelSpec): Boolean {
+        if (fileFor(model) == null) return false
+        return !model.needsProjector || projectorFor(model) != null
+    }
+
+    /** Unter welcher Kennung die Projektordatei abgelegt wird. */
+    fun projectorId(modelId: String): String = "$modelId-mmproj"
 
     /** Wie viel Platz die heruntergeladenen Modelle belegen. */
     fun usedBytes(): Long = root.listFiles()?.sumOf { it.length() } ?: 0L

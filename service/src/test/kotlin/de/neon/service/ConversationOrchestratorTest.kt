@@ -73,7 +73,7 @@ class ConversationOrchestratorTest {
         override var loadedModelId: String? = null
             private set
 
-        override suspend fun load(model: ModelSpec, file: File): Boolean {
+        override suspend fun load(model: ModelSpec, file: File, projector: File?): Boolean {
             loadedModelId = model.id
             return true
         }

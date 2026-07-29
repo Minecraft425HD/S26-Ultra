@@ -17,7 +17,7 @@ class SelectionPolicyTest {
     private val alltag = "qwen3-4b-instruct"
     private val denker = "qwen3-8b-thinking"
     private val code = "qwen3-coder-7b"
-    private val vision = "gemma-3n-e4b"
+    private val vision = "gemma-3-4b-it"
 
     private fun state(
         battery: Int = 80,

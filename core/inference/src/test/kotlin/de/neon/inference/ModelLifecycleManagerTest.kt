@@ -22,7 +22,7 @@ class ModelLifecycleManagerTest {
         var loadCount = 0
         var unloadCount = 0
 
-        override suspend fun load(model: ModelSpec, file: File): Boolean {
+        override suspend fun load(model: ModelSpec, file: File, projector: File?): Boolean {
             loadCount++
             if (!loadSucceeds) return false
             loadedModelId = model.id

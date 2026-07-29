@@ -1,11 +1,13 @@
 package de.neon.service
 
 import de.neon.inference.ChatMessage
+import de.neon.inference.ImageAttachment
 import de.neon.inference.GenerationChunk
 import de.neon.inference.GenerationRequest
 import de.neon.inference.InferenceEngine
 import de.neon.inference.ModelLifecycleManager
 import de.neon.inference.Role
+import de.neon.router.Capability
 import de.neon.router.DeviceAction
 import de.neon.router.DeviceState
 import de.neon.router.PortableRegex
@@ -232,7 +234,7 @@ class ConversationOrchestrator(
 
         // Gesprochenes wird auch gesprochen beantwortet — sonst müsste man aufs Telefon
         // sehen, um zu erfahren, was Neon geantwortet hat.
-        return handle(transcript.text, hasImage = hasImage, speak = true)
+        return handle(transcript.text, images = emptyList(), speak = true, hasImage = hasImage)
     }
 
     /**
@@ -243,11 +245,11 @@ class ConversationOrchestrator(
      */
     suspend fun handleText(
         text: String,
-        hasImage: Boolean = false,
+        images: List<ImageAttachment> = emptyList(),
         speak: Boolean = false,
     ): TurnReport? {
         if (text.isBlank()) return null
-        return handle(text, hasImage = hasImage, speak = speak)
+        return handle(text, images = images, speak = speak)
     }
 
     /**
@@ -259,8 +261,9 @@ class ConversationOrchestrator(
      */
     private suspend fun handle(
         text: String,
-        hasImage: Boolean,
+        images: List<ImageAttachment>,
         speak: Boolean,
+        hasImage: Boolean = images.isNotEmpty(),
     ): TurnReport = turnLock.withLock {
         val startedAt = clock()
         speakThisTurn = speak
@@ -282,7 +285,7 @@ class ConversationOrchestrator(
 
         val report = when (decision) {
             is RouteDecision.Direct -> handleDirect(decision, text, startedAt)
-            is RouteDecision.Generate -> handleGenerate(decision, utterance, text, startedAt)
+            is RouteDecision.Generate -> handleGenerate(decision, utterance, text, startedAt, images)
         }
 
         append(
@@ -351,6 +354,7 @@ class ConversationOrchestrator(
         utterance: Utterance,
         transcript: String,
         startedAt: Long,
+        images: List<ImageAttachment> = emptyList(),
     ): TurnReport {
         val selection = decision.selection
 
@@ -423,7 +427,13 @@ class ConversationOrchestrator(
                         )
                     )
                     addAll(turnHistory)
-                    add(ChatMessage(Role.USER, utterance.text))
+                    // Bilder nur, wenn das gewählte Modell sie ansehen kann. Sie einem
+                    // Textmodell zu schicken beantwortet llama-server mit einem Fehler —
+                    // und der Nutzer bekäme statt einer Antwort eine Fehlmeldung, obwohl
+                    // die Texterkennung längst gelesen hat, was im Bild steht.
+                    val bilder = if (selection.model.supports(Capability.VISION)) images
+                    else emptyList()
+                    add(ChatMessage(Role.USER, utterance.text, bilder))
                 },
             )
         ).collect { chunk ->

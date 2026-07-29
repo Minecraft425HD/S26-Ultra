@@ -11,6 +11,7 @@ import de.neon.audio.SpeechSegmenter
 import de.neon.audio.VoiceActivityDetector
 import de.neon.audio.WakeWordDetector
 import de.neon.audio.WakeWordPipeline
+import de.neon.inference.ImageAttachment
 import de.neon.inference.LlamaServerEngine
 import de.neon.inference.LocalRouterLlm
 import de.neon.inference.ModelLifecycleManager
@@ -27,6 +28,7 @@ import de.neon.memory.NeonDatabase
 import de.neon.memory.RoutingExampleRepository
 import de.neon.platform.DeviceStateProvider
 import de.neon.platform.NeonLog
+import de.neon.router.Capability
 import de.neon.router.HashingEmbeddingProvider
 import de.neon.router.InMemoryRouteOutcomeStore
 import de.neon.router.KnnClassifier
@@ -175,6 +177,31 @@ class NeonContainer(context: Context) {
     val attachmentState = MutableStateFlow(AttachmentState())
 
     /**
+     * Bilder, die mit der **nächsten** Frage mitgehen.
+     *
+     * Nur mit der nächsten, nicht mit allen folgenden: Ein Bild kostet je nach Größe
+     * Tausende Token. Es stillschweigend bei jeder weiteren Frage mitzuschicken würde den
+     * Kontext füllen und jede Antwort verlangsamen, ohne dass jemand den Grund sähe.
+     *
+     * Gilt nur, wenn ein Bildmodell mit Projektor vorliegt. Sonst bleibt es beim Text aus
+     * der Bilderkennung, der ohnehin schon im Index steht.
+     */
+    private val wartendeBilder = mutableListOf<ImageAttachment>()
+
+    val visionAvailable: Boolean
+        get() = registry.models.any {
+            it.supports(Capability.VISION) && modelStore.isAvailable(it)
+        }
+
+    /** Nimmt die wartenden Bilder heraus und leert die Liste. */
+    fun takePendingImages(): List<ImageAttachment> = synchronized(wartendeBilder) {
+        val kopie = wartendeBilder.toList()
+        wartendeBilder.clear()
+        attachmentState.value = attachmentState.value.copy(pendingImages = 0)
+        kopie
+    }
+
+    /**
      * Lebt so lange wie die Anwendung.
      *
      * Bewusst kein Scope des Dienstes: Die gelernten Beispiele sollen auch dann noch
@@ -288,6 +315,7 @@ class NeonContainer(context: Context) {
                     files = attachments.paths(),
                     chunkCount = attachments.chunkCount(),
                     message = zusammenfassung(ergebnis),
+                    pendingImages = synchronized(wartendeBilder) { wartendeBilder.size },
                 )
             }.onFailure {
                 NeonLog.e(TAG, "Anhänge nicht aufnehmbar", it)
@@ -314,6 +342,17 @@ class NeonContainer(context: Context) {
         sources: List<de.neon.attachments.AttachmentSource>,
     ): List<de.neon.attachments.AttachmentSource> = sources.map { quelle ->
         if (quelle !is UriSource || !quelle.istBild) return@map quelle
+
+        // Fürs Bildmodell aufheben — aber nur, wenn es eines gibt. Sonst wäre es Ballast,
+        // den niemand ansehen kann.
+        if (visionAvailable) {
+            runCatching {
+                val bytes = quelle.open().use { it.readBytes() }
+                synchronized(wartendeBilder) {
+                    wartendeBilder += ImageAttachment(bytes, quelle.mimeType ?: "image/jpeg")
+                }
+            }.onFailure { NeonLog.e(TAG, "Bild nicht lesbar für das Bildmodell", it) }
+        }
 
         val text = imageText.read(quelle.uri)
         if (text.isNullOrBlank()) {

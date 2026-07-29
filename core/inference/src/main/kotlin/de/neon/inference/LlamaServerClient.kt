@@ -94,7 +94,28 @@ class LlamaServerClient(
                 messages.forEach { message ->
                     add(buildJsonObject {
                         put("role", message.role.wireName)
-                        put("content", message.content)
+
+                        // Ohne Bilder bleibt der Inhalt eine schlichte Zeichenkette. Das ist
+                        // nicht nur kürzer, sondern nötig: Manche Chat-Vorlagen kommen mit
+                        // der Listenform nicht zurecht, und dann ist der Prompt still kaputt.
+                        if (message.images.isEmpty()) {
+                            put("content", message.content)
+                        } else {
+                            put("content", buildJsonArray {
+                                add(buildJsonObject {
+                                    put("type", "text")
+                                    put("text", message.content)
+                                })
+                                message.images.forEach { bild ->
+                                    add(buildJsonObject {
+                                        put("type", "image_url")
+                                        put("image_url", buildJsonObject {
+                                            put("url", bild.asDataUri())
+                                        })
+                                    })
+                                }
+                            })
+                        }
                     })
                 }
             })

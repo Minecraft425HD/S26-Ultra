@@ -14,8 +14,11 @@ import kotlin.concurrent.thread
  * ohne Android, ohne Prozessverwaltung.
  */
 interface ServerSupervisor {
-    /** @return ein Client für das Modell, oder `null`, wenn kein Server bereitsteht. */
-    suspend fun clientFor(modelId: String, file: File): LlamaServerClient?
+    /**
+     * @param projector die Projektordatei eines Bildmodells, sonst `null`.
+     * @return ein Client für das Modell, oder `null`, wenn kein Server bereitsteht.
+     */
+    suspend fun clientFor(modelId: String, file: File, projector: File? = null): LlamaServerClient?
 
     suspend fun shutdown()
 }
@@ -80,7 +83,11 @@ class ProcessServerSupervisor(
 
     val currentModelId: String? get() = servingModelId
 
-    override suspend fun clientFor(modelId: String, file: File): LlamaServerClient? {
+    override suspend fun clientFor(
+        modelId: String,
+        file: File,
+        projector: File?,
+    ): LlamaServerClient? {
         if (servingModelId == modelId && isRunning) {
             client?.let { if (it.isHealthy()) return it }
         }
@@ -96,7 +103,7 @@ class ProcessServerSupervisor(
         }
 
         stopping.set(false)
-        val started = runCatching { launch(file) }.getOrElse {
+        val started = runCatching { launch(file, projector) }.getOrElse {
             NeonLog.e(TAG, "llama-server ließ sich nicht starten", it)
             return null
         }
@@ -113,28 +120,36 @@ class ProcessServerSupervisor(
         return newClient
     }
 
-    private fun launch(model: File): Process {
-        val command = listOf(
-            binary.absolutePath,
-            "--model", model.absolutePath,
-            "--alias", model.nameWithoutExtension,
-            "--host", "127.0.0.1",
-            "--port", port.toString(),
-            "--ctx-size", contextSize.toString(),
-            "--threads", threads.toString(),
+    private fun launch(model: File, projector: File?): Process {
+        val command = buildList {
+            add(binary.absolutePath)
+            add("--model"); add(model.absolutePath)
+            add("--alias"); add(model.nameWithoutExtension)
+            add("--host"); add("127.0.0.1")
+            add("--port"); add(port.toString())
+            add("--ctx-size"); add(contextSize.toString())
+            add("--threads"); add(threads.toString())
+
             // Der Schlüssel-Wert-Speicher ist der Teil, der mit dem Kontextfenster wächst
             // — bei diesem Modell 144 KB je Token. Auf acht Bit komprimiert halbiert sich
             // das, und ein Fenster von 16384 kostet damit gut ein Gigabyte statt zwei
             // ein Viertel. Gegen einen echten Server geprüft, einschließlich einer
             // vollständigen Antwort.
-            "--cache-type-k", KV_CACHE_TYPE,
-            "--cache-type-v", KV_CACHE_TYPE,
+            add("--cache-type-k"); add(KV_CACHE_TYPE)
+            add("--cache-type-v"); add(KV_CACHE_TYPE)
+
+            // Ohne den Projektor kann ein Bildmodell keine Bilder ansehen. Er ist die
+            // zweite Hälfte des Modells und wird getrennt importiert.
+            if (projector != null) {
+                add("--mmproj"); add(projector.absolutePath)
+            }
+
             // Die Chat-Vorlage aus der GGUF-Datei benutzen, statt eine zu raten. Ohne das
             // sieht ein Modell mit ungewöhnlicher Vorlage einen falsch formatierten Prompt.
-            "--jinja",
+            add("--jinja")
             // Die eingebaute Weboberfläche wird nie benutzt und kostet nur Speicher.
-            "--no-webui",
-        )
+            add("--no-webui")
+        }
 
         val started = ProcessBuilder(command)
             .directory(context.filesDir)

@@ -7,4 +7,6 @@ data class AttachmentState(
     val chunkCount: Int = 0,
     /** Das Ergebnis der letzten Aufnahme, einschließlich dessen, was nicht ging. */
     val message: String? = null,
+    /** Bilder, die mit der nächsten Frage ans Bildmodell gehen. */
+    val pendingImages: Int = 0,
 )

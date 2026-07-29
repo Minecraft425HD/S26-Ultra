@@ -290,6 +290,15 @@ private fun Anhaenge(
                 }
             }
 
+            if (state.pendingImages > 0) {
+                Text(
+                    "${state.pendingImages} Bild(er) gehen mit der nächsten Frage ans " +
+                        "Bildmodell — danach nicht mehr, weil jedes Bild Kontext kostet.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+
             state.message?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
             }

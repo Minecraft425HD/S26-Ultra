@@ -117,7 +117,13 @@ class EscalationPolicyTest {
         assertEquals("qwen3-8b-thinking", escalation.strongestAvailable(state()).id)
 
         // Passt der Denker nicht in den Speicher, wird ehrlich das nächstkleinere gemeldet.
+        val mittel = state().copy(availableMemoryBytes = 3_500L * 1024 * 1024)
+        assertEquals("gemma-3-4b-it", escalation.strongestAvailable(mittel).id)
+
+        // Bei 3 GB fällt auch das Bildmodell heraus: Es zählt mit 3,11 GB, weil zu den
+        // Gewichten die Projektordatei gehört. Ohne die kann es keine Bilder ansehen, also
+        // wäre es unehrlich, nur die Gewichte zu rechnen.
         val eng = state().copy(availableMemoryBytes = 3L * 1024 * 1024 * 1024)
-        assertEquals("gemma-3n-e4b", escalation.strongestAvailable(eng).id)
+        assertEquals("qwen3-4b-instruct", escalation.strongestAvailable(eng).id)
     }
 }

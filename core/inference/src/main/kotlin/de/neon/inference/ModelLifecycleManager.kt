@@ -9,6 +9,14 @@ import java.io.File
 fun interface ModelFileResolver {
     /** @return die Datei, oder `null`, wenn das Modell noch nicht heruntergeladen ist. */
     fun fileFor(model: ModelSpec): File?
+
+    /**
+     * Die Projektordatei eines Bildmodells.
+     *
+     * Voreingestellt `null`: Die allermeisten Modelle bestehen aus genau einer Datei, und
+     * jeder Aufrufer, den Bilder nichts angehen, soll sich nicht darum kümmern müssen.
+     */
+    fun projectorFor(model: ModelSpec): File? = null
 }
 
 /**
@@ -87,7 +95,7 @@ class ModelLifecycleManager(
             current = null
         }
 
-        val loaded = runCatching { engine.load(model, file) }
+        val loaded = runCatching { engine.load(model, file, resolver.projectorFor(model)) }
         return when {
             loaded.isFailure ->
                 Result.Failed(model, loaded.exceptionOrNull()?.message ?: "unbekannter Fehler")

@@ -6,7 +6,40 @@ import java.io.File
 
 enum class Role { SYSTEM, USER, ASSISTANT }
 
-data class ChatMessage(val role: Role, val content: String)
+/**
+ * Eine Nachricht im Gespräch.
+ *
+ * @param images Bilder als reine Bytes, die zusammen mit dem Text gehen. Nur ein Modell mit
+ * Projektordatei kann etwas damit anfangen; alle anderen bekommen sie gar nicht erst
+ * geschickt, weil llama-server sie sonst mit einem Fehler abweist.
+ */
+data class ChatMessage(
+    val role: Role,
+    val content: String,
+    val images: List<ImageAttachment> = emptyList(),
+)
+
+/** Ein Bild, wie es an ein Bildmodell geht. */
+data class ImageAttachment(
+    val bytes: ByteArray,
+    /** Etwa `image/jpeg`. Landet unverändert in der Daten-URI. */
+    val mimeType: String,
+) {
+    override fun equals(other: Any?): Boolean =
+        this === other || (other is ImageAttachment && other.mimeType == mimeType && other.bytes.contentEquals(bytes))
+
+    override fun hashCode(): Int = 31 * mimeType.hashCode() + bytes.contentHashCode()
+
+    /**
+     * Das Bild als Daten-URI, so wie llama-server es erwartet.
+     *
+     * Base64 bläht die Daten um ein Drittel auf. Bei einem Bildschirmfoto sind das ein paar
+     * hundert Kilobyte über eine Verbindung nach 127.0.0.1 — der Umweg über eine Datei wäre
+     * mehr Aufwand als Gewinn.
+     */
+    fun asDataUri(): String =
+        "data:" + mimeType + ";base64," + java.util.Base64.getEncoder().encodeToString(bytes)
+}
 
 data class GenerationRequest(
     val messages: List<ChatMessage>,
@@ -40,7 +73,7 @@ interface InferenceEngine {
 
     val loadedModelId: String?
 
-    suspend fun load(model: ModelSpec, file: File): Boolean
+    suspend fun load(model: ModelSpec, file: File, projector: File? = null): Boolean
 
     suspend fun unload()
 

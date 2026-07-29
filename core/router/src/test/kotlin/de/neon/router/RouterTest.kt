@@ -120,7 +120,7 @@ class RouterTest {
         val generate = assertIs<RouteDecision.Generate>(decision)
         assertEquals(TaskCategory.BILD, generate.selection.analysis.category)
         assertTrue(generate.selection.analysis.needsVision)
-        assertEquals("gemma-3n-e4b", generate.selection.model.id)
+        assertEquals("gemma-3-4b-it", generate.selection.model.id)
     }
 
     @Test

@@ -114,6 +114,22 @@ class AvailableModelsTest {
     }
 
     @Test
+    fun `ein Bildmodell braucht zwei Dateien`() {
+        // In llama.cpp besteht ein Bildmodell aus Gewichten und einem Projektor. Fehlt der
+        // zweite, startet der Server zwar, kann aber keine Bilder ansehen — und der Fehler
+        // zeigt sich erst, wenn jemand ein Bild anhängt. Deshalb steht das in der Registry
+        // und nicht nur in der Ablage.
+        val bild = registry.require("gemma-3-4b-it")
+        assertTrue(bild.needsProjector, "das Bildmodell meldet keinen Projektorbedarf")
+        assertEquals("mmproj", bild.projectorFileName)
+
+        // Alle anderen kommen mit einer Datei aus.
+        registry.models.filterNot { it.id == bild.id }.forEach {
+            assertFalse(it.needsProjector, "${it.id} verlangt unerwartet einen Projektor")
+        }
+    }
+
+    @Test
     fun `ohne Angabe bleibt alles wie bisher`() {
         // Der Standardwert ist null und heißt „unbekannt", nicht „keins". Ein Aufrufer, der
         // die Verfügbarkeit nicht kennt, soll nicht plötzlich ohne Modell dastehen.

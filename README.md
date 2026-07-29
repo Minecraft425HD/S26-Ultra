@@ -274,7 +274,7 @@ Echte Antworten vom Sprachmodell, freihändiges Ansprechen mit „Hey Neon".
 - **NPU-Pfad.** llama.cpp läuft auf CPU und GPU. Der Qualcomm-Beschleuniger bliebe ein
   weiterer Sprung bei der Akkulaufzeit.
 
-**359 Unit-Tests**, `:app:assembleRelease` baut, `llama-server` für arm64 ist gebaut,
+**439 Unit-Tests**, `:app:assembleRelease` baut, `llama-server` für arm64 ist gebaut,
 ausgerichtet und gegen ein echtes Modell erprobt.
 
 ### Was die Tests hier grundsätzlich nicht sehen

@@ -260,7 +260,13 @@ class MainActivity : ComponentActivity() {
      */
     private fun sendText(container: NeonContainer, text: String) {
         lifecycleScope.launch {
-            runCatching { container.orchestrator.handleText(text, speak = speakTypedAnswers) }
+            runCatching {
+                container.orchestrator.handleText(
+                    text = text,
+                    images = container.takePendingImages(),
+                    speak = speakTypedAnswers,
+                )
+            }
                 .onFailure { NeonLog.e("MainActivity", "Getippte Frage fehlgeschlagen", it) }
         }
     }
@@ -286,6 +292,13 @@ class MainActivity : ComponentActivity() {
                             onWakeWordThreshold = { ready.wakeWordThreshold = it },
                             contextSize = ready.contextSize,
                             onContextSize = { ready.contextSize = it },
+                            onImportProjector = { modelId ->
+                                pendingImportModelId =
+                                    ready.modelStore.projectorId(modelId)
+                                importState.value =
+                                    ImportState.Running(pendingImportModelId!!, 0)
+                                pickModelFile.launch(arrayOf("*/*"))
+                            },
                             onImportModel = { modelId ->
                                 pendingImportModelId = modelId
                                 importState.value = ImportState.Running(modelId, 0)
@@ -426,6 +439,7 @@ private fun NeonScreen(
     contextSize: Int,
     onContextSize: (Int) -> Unit,
     onImportModel: (String) -> Unit,
+    onImportProjector: (String) -> Unit,
     onShareLog: () -> Unit,
     onSpeak: () -> Unit,
     onStart: () -> Unit,
@@ -644,6 +658,7 @@ private fun NeonScreen(
 
                         models.forEach { model ->
                             val available = isModelAvailable(model)
+                            val projektorFehlt = model.needsProjector && !available
                             Text(
                                 "${model.displayName} — ${gigabytes(model.sizeBytes)}",
                                 style = MaterialTheme.typography.bodyMedium,
@@ -668,6 +683,21 @@ private fun NeonScreen(
 
                                 else -> OutlinedButton(onClick = { onImportModel(model.id) }) {
                                     Text("Importieren")
+                                }
+                            }
+
+                            // Ein Bildmodell besteht aus zwei Dateien. Ohne den Projektor
+                            // startet der Server zwar, kann aber keine Bilder ansehen —
+                            // deshalb steht der zweite Knopf gleich daneben und nicht
+                            // irgendwo im Kleingedruckten.
+                            if (projektorFehlt) {
+                                Text(
+                                    "Braucht zusätzlich die Projektordatei (mmproj), " +
+                                        "sonst bleiben Bilder ungesehen.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                                OutlinedButton(onClick = { onImportProjector(model.id) }) {
+                                    Text("Projektor importieren")
                                 }
                             }
                             Spacer(Modifier.height(12.dp))
