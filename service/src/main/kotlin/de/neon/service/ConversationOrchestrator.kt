@@ -37,6 +37,13 @@ enum class NeonState {
     GEWECKT,
     ERKENNUNG,
     ROUTING,
+    /**
+     * Das Modell wird von der Platte gelesen.
+     *
+     * Ein eigener Zustand, weil das beim ersten Mal rund eine Minute dauert. Eine Minute
+     * lang "Denke nach ..." stehen zu lassen sieht aus wie ein Absturz.
+     */
+    MODELL_LAEDT,
     ANTWORT,
     SPRECHEN,
 }
@@ -357,6 +364,12 @@ class ConversationOrchestrator(
         images: List<ImageAttachment> = emptyList(),
     ): TurnReport {
         val selection = decision.selection
+
+        // Nur ansagen, wenn wirklich geladen wird. Liegt das Modell schon im Speicher,
+        // waere der Hinweis eine Luege und das Flackern stoerend.
+        if (lifecycle.loadedModelId != selection.model.id) {
+            _state.value = NeonState.MODELL_LAEDT
+        }
 
         when (val loaded = lifecycle.ensureLoaded(selection.model)) {
             is ModelLifecycleManager.Result.Ready -> Unit

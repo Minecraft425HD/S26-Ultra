@@ -799,6 +799,7 @@ private fun describe(state: NeonState): String = when (state) {
     NeonState.GEWECKT -> "Ich höre …"
     NeonState.ERKENNUNG -> "Verstehe …"
     NeonState.ROUTING -> "Wähle das passende Modell …"
+    NeonState.MODELL_LAEDT -> "Modell wird geladen …"
     NeonState.ANTWORT -> "Denke nach …"
     NeonState.SPRECHEN -> "Spricht"
 }

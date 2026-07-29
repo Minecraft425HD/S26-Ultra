@@ -5,6 +5,7 @@ import de.neon.platform.NeonLog
 import java.io.File
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
 /**
@@ -71,6 +72,9 @@ class ProcessServerSupervisor(
     private var client: LlamaServerClient? = null
     private val stopping = AtomicBoolean(false)
 
+    /** Wann der Server zuletzt etwas ausgegeben hat. Grundlage der Startfrist. */
+    private val lastOutputAt = AtomicLong(0)
+
     private val baseUrl: String = "http://127.0.0.1:$port"
 
     /** Wo das Programm nach der Installation liegt. */
@@ -110,7 +114,9 @@ class ProcessServerSupervisor(
         process = started
 
         val newClient = LlamaServerClient(baseUrl)
-        if (!waitForHealth(newClient)) {
+        // Die Dateigröße statt der Angabe aus der Registry: Sie beschreibt, was tatsächlich
+        // gelesen werden muss, und stimmt auch bei einer anderen Quantisierung.
+        if (!waitForHealth(newClient, file.length() + (projector?.length() ?: 0L))) {
             stopProcess()
             return null
         }
@@ -129,6 +135,10 @@ class ProcessServerSupervisor(
             add("--port"); add(port.toString())
             add("--ctx-size"); add(contextSize.toString())
             add("--threads"); add(threads.toString())
+
+            // Ein Telefon, ein Nutzer. llama-server legt sonst vier Bearbeitungsplätze an,
+            // die hier nie gleichzeitig gebraucht werden.
+            add("-np"); add("1")
 
             // Der Schlüssel-Wert-Speicher ist der Teil, der mit dem Kontextfenster wächst
             // — bei diesem Modell 144 KB je Token. Auf acht Bit komprimiert halbiert sich
@@ -169,24 +179,72 @@ class ProcessServerSupervisor(
         thread(name = "neon-llama-log", isDaemon = true) {
             runCatching {
                 process.inputStream.bufferedReader().useLines { lines ->
-                    lines.forEach { NeonLog.d(TAG, it) }
+                    lines.forEach {
+                        // Jede Zeile ist ein Lebenszeichen. Daran hängt die Startfrist:
+                        // Ein Server, der noch redet, arbeitet noch.
+                        lastOutputAt.set(System.currentTimeMillis())
+                        NeonLog.d(TAG, it)
+                    }
                 }
             }
         }
     }
 
-    private fun waitForHealth(client: LlamaServerClient): Boolean {
-        val deadline = System.currentTimeMillis() + STARTUP_TIMEOUT_MILLIS
-        while (System.currentTimeMillis() < deadline) {
+    /**
+     * Wartet, bis der Server antwortet.
+     *
+     * **Warum nicht einfach eine feste Frist.** Hier stand einmal eine Minute. Auf dem Gerät
+     * brauchte das Alltagsmodell 59,548 Sekunden — Neon gab 450 Millisekunden später auf und
+     * erschlug einen Server, der gerade fertig geworden war. Der nächste Versuch begann von
+     * vorn und scheiterte genauso: kein Wackeln, sondern ein dauerhafter Ausfall.
+     *
+     * Eine größere feste Zahl wäre nur eine bessere Vermutung. Die Ladezeit hängt an der
+     * Modellgröße (2,5 GB gegen 5 GB), am Seitencache (kalt gegen warm) und an Androids
+     * Dateiverschlüsselung, die beim ersten Lesen jede Seite entschlüsselt — gemessene
+     * 42 MB/s statt der Geschwindigkeit des Flash-Speichers.
+     *
+     * Deshalb zwei Bedingungen statt einer:
+     *
+     *  - **Stille.** Solange der Server Ausgabezeilen schreibt, arbeitet er. Erst wenn er
+     *    [SILENCE_TIMEOUT_MILLIS] lang schweigt *und* nicht antwortet, gilt er als hängend.
+     *  - **Obergrenze nach Größe.** Als zweite Sicherung für den Fall, dass er stumm hängt:
+     *    eine Frist, die mit der Modellgröße wächst statt für alle Modelle gleich zu raten.
+     */
+    private fun waitForHealth(client: LlamaServerClient, modelBytes: Long): Boolean {
+        val budget = startupBudgetMillis(modelBytes)
+        val begonnen = System.currentTimeMillis()
+        lastOutputAt.set(begonnen)
+
+        NeonLog.i(TAG, "warte auf llama-server, Frist ${budget / 1000} s für ${modelBytes / MB} MB")
+
+        while (System.currentTimeMillis() - begonnen < budget) {
             if (stopping.get()) return false
             if (process?.isAlive != true) {
                 NeonLog.e(TAG, "llama-server hat sich beim Start beendet")
                 return false
             }
-            if (client.isHealthy()) return true
+            if (client.isHealthy()) {
+                NeonLog.i(TAG, "llama-server bereit nach ${System.currentTimeMillis() - begonnen} ms")
+                return true
+            }
+
+            val stille = System.currentTimeMillis() - lastOutputAt.get()
+            if (stille > SILENCE_TIMEOUT_MILLIS) {
+                NeonLog.e(TAG, "llama-server schweigt seit $stille ms und antwortet nicht")
+                return false
+            }
+
             Thread.sleep(HEALTH_POLL_MILLIS)
         }
-        NeonLog.e(TAG, "llama-server war nach $STARTUP_TIMEOUT_MILLIS ms nicht bereit")
+
+        // Der letzte Blick, bevor eine Minute Arbeit weggeworfen wird. Genau dieser eine
+        // Aufruf hätte den Ausfall auf dem Gerät verhindert.
+        if (client.isHealthy()) {
+            NeonLog.i(TAG, "llama-server war knapp doch noch rechtzeitig fertig")
+            return true
+        }
+
+        NeonLog.e(TAG, "llama-server war nach $budget ms nicht bereit")
         return false
     }
 
@@ -264,8 +322,43 @@ class ProcessServerSupervisor(
          */
         const val DEFAULT_THREADS = 8
 
-        /** Ein 4B-Modell braucht auf einem Telefon einige Sekunden zum Laden. */
-        private const val STARTUP_TIMEOUT_MILLIS = 60_000L
+        private const val MB = 1024L * 1024
+        private const val GB = 1024L * MB
+
+        /**
+         * Grundzeit für den Start, unabhängig von der Modellgröße.
+         *
+         * Mindestens so lang wie [SILENCE_TIMEOUT_MILLIS]. Sonst schlüge bei einem kleinen
+         * Modell immer die Uhr zu, bevor das Schweigen überhaupt auffallen könnte — und die
+         * Uhr ist genau das Kriterium, das sich als falsch erwiesen hat.
+         */
+        const val STARTUP_BASE_MILLIS = 120_000L
+
+        /**
+         * Zuschlag je Gigabyte Modelldatei.
+         *
+         * Gemessen wurden auf dem S26 Ultra rund 42 MB/s beim ersten Laden, also etwa
+         * 25 Sekunden je Gigabyte. Mit 90 Sekunden liegt die Frist mehr als dreifach
+         * darüber — reichlich, aber das ist der Sinn: Zu früh aufzugeben kostet die ganze
+         * Antwort, zu spät nur Geduld in einem Fall, der ohnehin schiefgeht.
+         */
+        const val STARTUP_PER_GIGABYTE_MILLIS = 90_000L
+
+        /**
+         * So lange darf der Server schweigen, bevor er als hängend gilt.
+         *
+         * Beim Laden schreibt llama.cpp regelmäßig Zeilen. Anderthalb Minuten ohne ein
+         * einziges Wort heißen: Er kommt nicht mehr voran.
+         *
+         * Kürzer als [STARTUP_BASE_MILLIS], damit dieses Kriterium in jedem Fall zuerst
+         * greift. Ein hängender Server soll am Schweigen auffallen und nicht an der Uhr —
+         * die Uhr ist genau das, was sich als falsch erwiesen hat.
+         */
+        const val SILENCE_TIMEOUT_MILLIS = 90_000L
+
+        /** Die Frist für ein Modell dieser Größe. */
+        fun startupBudgetMillis(modelBytes: Long): Long =
+            STARTUP_BASE_MILLIS + STARTUP_PER_GIGABYTE_MILLIS * modelBytes / GB
         private const val HEALTH_POLL_MILLIS = 250L
         private const val SHUTDOWN_TIMEOUT_MILLIS = 5_000L
     }
