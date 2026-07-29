@@ -125,7 +125,11 @@ object SignalInference {
      */
     const val AMBIGUOUS_SIMILARITY = 0.30
 
-    private val deeperRequest = Regex(
+    // Über PortableRegex, obwohl hier nie ein JVM-eigenes Flag stand: Eine voreingestellte
+    // Wortgrenze bedeutet auf beiden Maschinen etwas anderes — die JVM zählt nur ASCII als
+    // Wortzeichen, ICU den ganzen Unicode-Bereich. Bei deutschem Text ist das ein
+    // Unterschied, den kein Test hier je zeigen würde.
+    private val deeperRequest = PortableRegex.compile(
         "\\b(denk nochmal|denke nochmal|genauer|gründlicher|gruendlicher|" +
             "ausführlicher|ausfuehrlicher|streng dich an|nochmal richtig)\\b"
     )

@@ -190,11 +190,17 @@ class RuleMatcher(
         /**
          * Alle Muster laufen mit Unicode-fähigen Wortgrenzen.
          *
-         * Ohne `(?U)` zählt Java Umlaute nicht als Wortzeichen — `\böffne` greift dann
-         * nicht, weil vor dem "ö" keine Wortgrenze erkannt wird. Bei einer deutschen
-         * Grammatik ist das keine Feinheit, sondern ein stiller Totalausfall.
+         * Bei voreingestellten Wortgrenzen zählt die JVM Umlaute nicht als Wortzeichen —
+         * `\böffne` greift dann nicht, weil vor dem „ö" keine Grenze erkannt wird. Bei
+         * einer deutschen Grammatik ist das kein Randfall, sondern ein stiller
+         * Totalausfall.
+         *
+         * Hier stand deshalb einmal das eingebettete Unicode-Flag. Das kennt nur das
+         * OpenJDK; Androids ICU-Maschine wirft darauf eine Ausnahme — und weil diese
+         * Muster in einem Klasseninitialisierer entstehen, riss das die ganze App beim
+         * Start mit. [PortableRegex] schreibt die Wortgrenze stattdessen aus.
          */
-        fun rx(pattern: String) = Regex("(?U)$pattern")
+        fun rx(pattern: String) = PortableRegex.compile(pattern)
 
         val PUNCTUATION = Regex("[.,;:!?\"'()\\[\\]{}]")
 

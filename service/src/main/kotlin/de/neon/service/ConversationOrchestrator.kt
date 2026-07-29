@@ -8,6 +8,7 @@ import de.neon.inference.ModelLifecycleManager
 import de.neon.inference.Role
 import de.neon.router.DeviceAction
 import de.neon.router.DeviceState
+import de.neon.router.PortableRegex
 import de.neon.router.RouteDecision
 import de.neon.router.RouteOutcome
 import de.neon.router.RouteAnalysis
@@ -405,8 +406,11 @@ class ConversationOrchestrator(
         /** Ein Werkzeugaufruf ist kurz; die Grenze schützt vor einem entgleisten Modell. */
         const val TOOL_CALL_MAX_TOKENS = 128
 
-        val DEEPER_ANSWER = Regex(
-            "(?U)\\b(denk nochmal|denke nochmal|genauer|gründlicher|gruendlicher|" +
+        // Über PortableRegex, nicht über Regex: Die Wortgrenze muss auf dem Telefon
+        // dasselbe bedeuten wie im Test, und das eingebettete Unicode-Flag, das hier
+        // einmal stand, lässt Android gar nicht erst starten.
+        val DEEPER_ANSWER = PortableRegex.compile(
+            "\\b(denk nochmal|denke nochmal|genauer|gründlicher|gruendlicher|" +
                 "ausführlicher|ausfuehrlicher|streng dich an)\\b"
         )
     }

@@ -274,12 +274,25 @@ Echte Antworten vom Sprachmodell, freihändiges Ansprechen mit „Hey Neon".
 - **NPU-Pfad.** llama.cpp läuft auf CPU und GPU. Der Qualcomm-Beschleuniger bliebe ein
   weiterer Sprung bei der Akkulaufzeit.
 
-**308 Unit-Tests**, `:app:assembleDebug` baut, `llama-server` für arm64 ist geprüft.
+**359 Unit-Tests**, `:app:assembleRelease` baut, `llama-server` für arm64 ist gebaut,
+ausgerichtet und gegen ein echtes Modell erprobt.
 
-Die JNI-Brücke unter `core/inference/src/main/cpp/` ist die einzige Datei im Projekt, die
-noch nie kompiliert wurde — sie braucht NDK und llama.cpp-Quellen, die beide nicht im
-Repository liegen. llama.cpp ändert seine API regelmäßig; beim ersten Bauen ist mit
-Anpassungen zu rechnen.
+### Was die Tests hier grundsätzlich nicht sehen
+
+Die Prüfläufe laufen auf der JVM, auch die mit Robolectric. Wo Android eine andere
+Implementierung mitbringt als das OpenJDK, kann ein Test hier grün sein und die App auf dem
+Telefon trotzdem sterben. Zwei Stellen, an denen genau das passiert ist:
+
+- **Reguläre Ausdrücke.** Hinter `java.util.regex` steht auf Android ICU, auf der JVM das
+  OpenJDK. Das eingebettete Unicode-Flag kennt nur letzteres; Neon starb daran in einem
+  Klasseninitialisierer, bevor irgendetwas zu sehen war. Deshalb geht jedes Muster über
+  `PortableRegex`, das die Wortgrenze ausschreibt statt sie einer Voreinstellung zu
+  überlassen — und ein Test durchsucht die Quellen nach den bekannten Eigenheiten.
+- **Native Bibliotheken.** Siehe den Abschnitt zu 16-KB-Speicherseiten weiter oben. Geprüft
+  wird in der CI an der fertigen APK.
+
+Beide Male ist der Schutz derselbe: Nicht das Verhalten nachstellen, sondern das
+Erzeugnis nachmessen.
 
 ## Lizenz
 
