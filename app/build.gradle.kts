@@ -1,8 +1,37 @@
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
+
+/**
+ * Der Commit, aus dem gebaut wird — oder `"unbekannt"`.
+ *
+ * Das Bauen darf daran nicht hängen: Wer das Projekt als Archiv ohne `.git` auspackt, soll
+ * trotzdem bauen können. Eine fehlende Auskunft wird benannt, nicht erfunden.
+ */
+fun gitCommit(): String = runCatching {
+    // `providers.exec` und nicht `ProcessBuilder`: Gradles
+    // Konfigurations-Zwischenspeicherung verbietet externe Prozesse zur Konfigurationszeit
+    // ausdrücklich — mit ProcessBuilder bricht der Build ab. Über den Provider erfährt
+    // Gradle vom Aufruf und kann ihn richtig behandeln.
+    val lauf = providers.exec {
+        commandLine("git", "rev-parse", "--short", "HEAD")
+        // Ein Verzeichnis ohne Git soll den Build nicht anhalten, sondern "unbekannt" ergeben.
+        isIgnoreExitValue = true
+    }
+    val ausgabe = lauf.standardOutput.asText.get().trim()
+    if (lauf.result.get().exitValue == 0 && ausgabe.isNotEmpty()) ausgabe else "unbekannt"
+}.getOrDefault("unbekannt")
+
+fun buildTime(): String = DateTimeFormatter
+    .ofPattern("dd.MM.yyyy HH:mm 'UTC'")
+    .withZone(ZoneOffset.UTC)
+    .format(Instant.now())
 
 android {
     namespace = "de.neon.app"
@@ -14,6 +43,16 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0-m1"
+
+        // Welcher Stand tatsächlich läuft.
+        //
+        // Der Grund: `versionName` steht seit dem ersten Tag unverändert da, und damit
+        // schrieb jede Fassung dieselbe Startzeile ins Protokoll. Bei einem gemeldeten
+        // Fehler war deshalb nicht zu erkennen, ob die neue APK überhaupt installiert war —
+        // an einem Tag mit einem Dutzend Builds ist das keine Kleinigkeit, sondern der
+        // Unterschied zwischen Messen und Raten.
+        buildConfigField("String", "GIT_COMMIT", "\"${gitCommit()}\"")
+        buildConfigField("String", "BUILD_TIME", "\"${buildTime()}\"")
 
         ndk {
             // Nur 64-Bit ARM. Ohne diese Einschränkung packt ONNX Runtime seine nativen

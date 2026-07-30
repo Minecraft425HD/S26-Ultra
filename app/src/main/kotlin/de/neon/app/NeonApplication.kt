@@ -2,6 +2,7 @@ package de.neon.app
 
 import android.app.Application
 import de.neon.platform.CrashReporter
+import de.neon.platform.DeviceMemory
 import de.neon.platform.NeonLog
 import java.io.File
 
@@ -24,6 +25,17 @@ class NeonApplication : Application() {
     lateinit var crashReporter: CrashReporter
         private set
 
+    /**
+     * Welche Fassung genau läuft: Version, Commit und Bauzeitpunkt.
+     *
+     * `versionName` allein genügte nicht — er stand seit dem ersten Tag unverändert da, und
+     * damit schrieb jede der zwölf APKs eines Tages dieselbe Startzeile. Bei einem
+     * gemeldeten Fehler war dann nicht einmal zu erkennen, ob die neue überhaupt
+     * installiert war.
+     */
+    val bauStand: String
+        get() = "${BuildConfig.VERSION_NAME} (${BuildConfig.GIT_COMMIT}, ${BuildConfig.BUILD_TIME})"
+
     override fun onCreate() {
         super.onCreate()
 
@@ -32,10 +44,21 @@ class NeonApplication : Application() {
         // Allererste Anweisung. Alles, was danach schiefgeht, ist damit beim nächsten Start
         // ablesbar — ohne adb, ohne Entwicklungsumgebung.
         crashReporter = CrashReporter(logDirectory)
-        crashReporter.install(BuildConfig.VERSION_NAME)
+        crashReporter.install(bauStand)
 
         NeonLog.install(logDirectory)
-        NeonLog.i(TAG, "Neon startet — Version ${BuildConfig.VERSION_NAME}")
+        NeonLog.i(TAG, "Neon startet — $bauStand")
+
+        // Was das Gerät kann und wie viel Platz es hat, gleich zu Beginn.
+        //
+        // Bisher stand das nur beim Ladeversuch im Protokoll — ein Protokoll ohne gestellte
+        // Frage enthielt es deshalb nicht. Genau diese drei Zahlen wurden in diesem Projekt
+        // dreimal falsch angenommen: Seitengröße, Befehlssatz, Arbeitsspeicher. Sie kosten
+        // zwei Dateizugriffe und gehören in jedes Protokoll.
+        NeonLog.i(
+            TAG,
+            "${de.neon.inference.CpuFeatures.describe()} · ${DeviceMemory.read().describe()}",
+        )
 
         // Der Aufbau darf scheitern, ohne die App mitzunehmen. Ein Assistent, der nicht
         // startet, weil ein Bestandteil hakt, kann nicht einmal sagen, welcher.
@@ -51,7 +74,7 @@ class NeonApplication : Application() {
             .onFailure { error ->
                 startupFailure = error
                 NeonLog.e(TAG, "Der Objektgraph ließ sich nicht aufbauen", error)
-                crashReporter.recordHandled("NeonContainer", error, BuildConfig.VERSION_NAME)
+                crashReporter.recordHandled("NeonContainer", error, bauStand)
             }
 
         de.neon.service.NeonForegroundService.dependencyFactory = factory@{
