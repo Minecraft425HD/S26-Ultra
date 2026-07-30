@@ -104,6 +104,14 @@ class ProcessServerSupervisor(
 
     private val baseUrl: String = "http://127.0.0.1:$port"
 
+    /**
+     * Die Merkdatei für den laufenden Ladeversuch.
+     *
+     * Im Datenverzeichnis und nicht im Cache: Android darf den Cache jederzeit leeren, und
+     * eine Spur, die genau dann verschwindet, wenn es knapp wird, wäre nutzlos.
+     */
+    private val attemptLog = LoadAttemptLog(File(context.filesDir, "ladeversuch.txt"))
+
     /** Wo das Programm nach der Installation liegt. */
     private val binary: File
         get() = File(context.applicationInfo.nativeLibraryDir, BINARY_NAME)
@@ -135,13 +143,41 @@ class ProcessServerSupervisor(
 
         stopping.set(false)
 
-        // Einmal je Serverstart: was der Prozessor kann. Zusammen mit der `system_info`-
-        // Zeile, die llama-server gleich danach schreibt, ergibt das den Vergleich, auf den
-        // es ankommt — was das Gerät könnte gegen das, was die Binärdatei benutzt.
-        NeonLog.i(TAG, CpuFeatures.describe())
+        // Was der letzte Anlauf nicht mehr sagen konnte.
+        //
+        // Wird der App-Prozess von Android wegen Speichermangels beendet, geschieht das mit
+        // SIGKILL — ohne Handler, ohne Protokollzeile. Auf dem Gerät starb er sechsmal
+        // hintereinander beim Laden, und dazwischen stand nichts als die nächste
+        // Startmeldung. Diese Zeile ist die Nachricht von damals.
+        attemptLog.verlorenerVersuch()?.let { NeonLog.e(TAG, it.describeAsLost()) }
+
+        // Vor dem eigenen Server erst die aufräumen, die ihre App nicht überlebt haben.
+        // Jeder von ihnen hält das Modell offen; aus einem Tod wird sonst eine
+        // Kettenreaktion, weil jeder neue Anlauf einen weiteren daneben legt.
+        killOrphans()
+
+        // Einmal je Serverstart: was der Prozessor kann und wie viel Luft noch ist.
+        // Zusammen mit der `system_info`-Zeile, die llama-server gleich danach schreibt,
+        // ergibt das den Vergleich, auf den es ankommt — was das Gerät könnte gegen das,
+        // was die Binärdatei benutzt.
+        val speicher = DeviceMemory.read()
+        NeonLog.i(TAG, "${CpuFeatures.describe()} · ${speicher.describe()}")
+
+        val modelBytes = file.length() + (projector?.length() ?: 0L)
+        attemptLog.beginnen(
+            LoadAttempt(
+                startedAtMillis = System.currentTimeMillis(),
+                modelName = file.name,
+                modelBytes = modelBytes,
+                contextSize = contextSize,
+                kvBytes = contextSize.toLong() * KV_BYTES_PER_TOKEN,
+                memory = speicher,
+            )
+        )
 
         val started = runCatching { launch(file, projector) }.getOrElse {
             NeonLog.e(TAG, "llama-server ließ sich nicht starten", it)
+            attemptLog.gelungen()
             return null
         }
         process = started
@@ -149,14 +185,34 @@ class ProcessServerSupervisor(
         val newClient = LlamaServerClient(baseUrl)
         // Die Dateigröße statt der Angabe aus der Registry: Sie beschreibt, was tatsächlich
         // gelesen werden muss, und stimmt auch bei einer anderen Quantisierung.
-        if (!waitForHealth(newClient, file.length() + (projector?.length() ?: 0L))) {
+        if (!waitForHealth(newClient, modelBytes)) {
             stopProcess()
+            // Auch ein berichteter Fehlschlag ist ein zurückgekommener Versuch: Die
+            // Merkdatei ist nur für die Fälle da, in denen niemand mehr berichten konnte.
+            attemptLog.gelungen()
             return null
         }
 
+        attemptLog.gelungen()
         servingModelId = modelId
         client = newClient
         return newClient
+    }
+
+    /**
+     * Beendet `llama-server`-Prozesse, die von einem früheren App-Prozess übrig sind.
+     *
+     * Erlaubt ist das, weil sie dieselbe Benutzerkennung tragen wie Neon selbst — es sind
+     * die eigenen Kindprozesse, nur ohne Elternteil.
+     */
+    private fun killOrphans() {
+        val pfad = binary.absolutePath
+        val eigene = android.os.Process.myPid()
+        val opfer = OrphanedServers.toKill(OrphanedServers.readProcesses(), pfad, eigene)
+        if (opfer.isEmpty()) return
+
+        NeonLog.i(TAG, "beende ${opfer.size} übrig gebliebene llama-server: $opfer")
+        opfer.forEach { pid -> runCatching { android.os.Process.killProcess(pid) } }
     }
 
     private fun launch(model: File, projector: File?): Process {

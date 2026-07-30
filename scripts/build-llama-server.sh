@@ -26,13 +26,40 @@ die() { printf '\033[1;31m!!\033[0m %s\n' "$*" >&2; exit 1; }
 command -v cmake >/dev/null || die "cmake fehlt."
 command -v ninja >/dev/null || die "ninja fehlt."
 
+# Ein fester Stand, kein `master`.
+#
+# Hier stand `git pull --ff-only`, und das hat eine Runde gekostet: Beim Nachbessern der
+# -march-Flags holte das Skript nebenbei einen neuen Programmstand — von e9fa078 auf
+# 3018a11. Damit waren zwei Dinge auf einmal geändert, und als der App-Prozess danach
+# sechsmal beim Laden vom System erschlagen wurde, war nicht mehr zu unterscheiden, welche
+# der beiden Änderungen es war.
+#
+# e9fa078 ist der Stand, der auf dem Gerät nachweislich in 62 Sekunden geladen und
+# geantwortet hat. Aktualisiert wird künftig absichtlich und einzeln:
+#
+#   LLAMA_CPP_REV=<commit> ./scripts/build-llama-server.sh
+#
+# Der **vollständige** Hash, nicht die Kurzform: GitHub liefert einen einzelnen Commit nur
+# gegen den ganzen Namen aus („couldn't find remote ref"), und eine Abkürzung wäre hier
+# ohnehin nur eine weitere Stelle, an der etwas mehrdeutig sein kann.
+LLAMA_CPP_REV="${LLAMA_CPP_REV:-e9fa0781f1c25fc4fe8c86be1edc6970661ad6f0}"
+
 if [[ -d "$WORK/.git" ]]; then
-    log "llama.cpp aktualisieren"
-    git -C "$WORK" pull --ff-only
+    log "llama.cpp auf $LLAMA_CPP_REV bringen"
 else
-    log "llama.cpp klonen"
-    git clone --depth 1 https://github.com/ggml-org/llama.cpp "$WORK"
+    log "llama.cpp anlegen"
+    git init -q "$WORK"
+    git -C "$WORK" remote add origin https://github.com/ggml-org/llama.cpp
 fi
+
+# --depth 1 auf einen Commit: GitHub erlaubt das, und es spart das ganze Archiv.
+git -C "$WORK" fetch -q --depth 1 origin "$LLAMA_CPP_REV" \
+    || die "llama.cpp $LLAMA_CPP_REV ließ sich nicht holen."
+git -C "$WORK" checkout -q --force FETCH_HEAD
+git -C "$WORK" submodule update -q --init --recursive --depth 1 2>/dev/null || true
+
+BUILT_REV="$(git -C "$WORK" rev-parse --short HEAD)"
+log "gebaut wird llama.cpp $BUILT_REV"
 
 log "für arm64-v8a konfigurieren"
 # BUILD_SHARED_LIBS=OFF ist entscheidend: So entsteht ein einzelnes, in sich geschlossenes
@@ -139,5 +166,27 @@ else
     printf '\033[1;33m??\033[0m %s\n' "llvm-objdump fehlt — Befehlssatz nicht geprüft." >&2
 fi
 
-log "fertig: $TARGET ($(du -h "$TARGET" | cut -f1), Ausrichtung $WORST Byte)"
+# Und den Programmstand aus der fertigen Datei zurücklesen.
+#
+# llama.cpp legt seinen Commit als Zeichenkette in die Binärdatei. Genau daran liess sich
+# nachweisen, dass zwei verschiedene Stände im Umlauf waren — nachdem das Bauskript selbst
+# nirgends vermerkt hatte, was es gebaut hatte. Ein Skript, das sein Ergebnis nicht
+# nachliest, behauptet nur.
+#
+# Kein `grep -q` in einer Pipeline: Unter `set -o pipefail` schlägt die ganze Pipeline fehl,
+# sobald ein Glied fehlschlägt — und `grep -q` beendet sich beim ersten Treffer, wodurch
+# `strings` ein SIGPIPE bekommt und mit Fehler endet. Der Treffer wäre da, die Prüfung
+# meldete trotzdem "nicht gefunden". Genau das ist hier passiert. Deshalb `grep -c`, das
+# seine Eingabe zu Ende liest.
+log "Programmstand in der Datei prüfen"
+REV_TREFFER=$(strings -a "$TARGET" | grep -cxF "$BUILT_REV" || true)
+if (( REV_TREFFER > 0 )); then
+    log "  llama.cpp $BUILT_REV steht in der Datei"
+else
+    die "In $TARGET steht nicht der Commit $BUILT_REV, der gebaut werden sollte.
+     Gefunden: $(strings -a "$TARGET" | grep -oE '^[0-9a-f]{7}$' | head -3 | tr '\n' ' ')
+     Meist ein stehengebliebenes Bauverzeichnis: $WORK/build-arm64 löschen."
+fi
+
+log "fertig: $TARGET ($(du -h "$TARGET" | cut -f1), llama.cpp $BUILT_REV, Ausrichtung $WORST Byte)"
 file "$TARGET" || true
