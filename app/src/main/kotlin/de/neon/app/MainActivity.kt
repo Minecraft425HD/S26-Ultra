@@ -680,15 +680,20 @@ private fun NeonScreen(
                             // Regler gaukelte eine Genauigkeit vor, die die Sache nicht hat.
                             steps = 3,
                         )
+                        // Die Zahl gilt für das größte eingerichtete Modell: Es hat den
+                        // teuersten Schlüssel-Wert-Speicher, und wer plant, soll den
+                        // schlimmsten Fall sehen und nicht den günstigsten.
+                        val kvJeToken = models.maxOfOrNull { it.kvBytesPerToken }
+                            ?: ProcessServerSupervisor.KV_BYTES_PER_TOKEN
                         Text(
                             "${kontext.toInt()} Token — etwa ${kontext.toInt() / 1000 * 750} Wörter, " +
-                                gigabytes(kontext.toInt().toLong() * ProcessServerSupervisor.KV_BYTES_PER_TOKEN) +
-                                " Arbeitsspeicher",
+                                gigabytes(kontext.toInt().toLong() * kvJeToken) +
+                                " Arbeitsspeicher beim größten Modell",
                             style = MaterialTheme.typography.bodySmall,
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            speicherHinweis(freierSpeicher, kontext.toInt()),
+                            speicherHinweis(freierSpeicher, kontext.toInt(), kvJeToken),
                             style = MaterialTheme.typography.bodySmall,
                         )
                         Spacer(Modifier.height(4.dp))
@@ -869,13 +874,18 @@ private fun gigabytes(bytes: Long): String =
  * erschlagen, ohne dass irgendwo ein Zusammenhang zu sehen war. Wer den Regler bewegt, soll
  * die Grenze sehen, bevor er sie überschreitet.
  */
-internal fun speicherHinweis(speicher: de.neon.platform.MemoryReading, gewuenscht: Int): String {
+internal fun speicherHinweis(
+    speicher: de.neon.platform.MemoryReading,
+    gewuenscht: Int,
+    kvBytesPerToken: Long = de.neon.inference.ProcessServerSupervisor.KV_BYTES_PER_TOKEN,
+): String {
     if (!speicher.known) {
         return "Freier Speicher nicht lesbar — Neon benutzt den eingestellten Wert."
     }
     val moeglich = de.neon.inference.ProcessServerSupervisor.passendeKontextgroesse(
         speicher.availableBytes,
         gewuenscht,
+        kvBytesPerToken,
     )
     val frei = speicher.describe()
     return if (moeglich >= gewuenscht) {

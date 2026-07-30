@@ -26,15 +26,57 @@ class ContextSizeTest {
 
     @Test
     fun `der gemessene Fall ergibt 4096`() {
-        // 1600 MB frei. Ein Drittel davon sind 533 MB; 8192 bräuchte 576 MB, 4096 nur 288.
+        // 1600 MB frei. Ein Fünftel davon sind 320 MB; 8192 bräuchte 576 MB, 4096 nur 288.
         assertEquals(4_096, waehlen(1_600))
     }
 
     @Test
-    fun `der Schluessel-Wert-Speicher bleibt unter einem Drittel`() {
+    fun `bei 1,7 GB frei wird nicht 8192 gewaehlt`() {
+        // **Der Fall, der auf dem Gerät zum Abschuss führte.** Mit der ersten Fassung dieser
+        // Regel (ein Drittel) waren 580 MB erlaubt, 8192 brauchte 576 — vier Megabyte
+        // Spielraum. Der Prozess wurde erschlagen. Bei 1,9 GB frei überlebte derselbe Wert
+        // zufällig; das war Glück, keine Entscheidung.
+        //
+        // Was in der Rechnung fehlte, sind die Rechenpuffer: ebenfalls anonym, ebenfalls
+        // nicht verdrängbar, und für ein 4-B-Modell mehrere hundert Megabyte.
+        assertEquals(4_096, waehlen(1_700), "8192 bei 1,7 GB frei — genau das wurde getötet")
+        assertEquals(4_096, waehlen(1_900), "8192 bei 1,9 GB frei — das überlebte nur knapp")
+    }
+
+    @Test
+    fun `die KV-Groesse kommt vom Modell`() {
+        // Qwen3 1.7B hat 28 Schichten statt 36, also 57344 Byte je Token statt 73728.
+        // Wäre die Konstante des 4-B-Modells fest verdrahtet, würde für das kleinere Modell
+        // 22 Prozent zu viel gerechnet — und das Kontextfenster grundlos gekürzt.
+        val kleines = 57_344L
+
+        assertEquals(
+            8_192,
+            ProcessServerSupervisor.passendeKontextgroesse(
+                verfuegbar = 2_400 * mb,
+                obergrenze = 16_384,
+                kvBytesPerToken = kleines,
+            ),
+            "mit 57344 Byte je Token passen bei 2400 MB frei 8192 Token",
+        )
+
+        // Dasselbe Speicherangebot, das größere Modell: Da passt nur 4096.
+        assertEquals(
+            4_096,
+            ProcessServerSupervisor.passendeKontextgroesse(
+                verfuegbar = 2_400 * mb,
+                obergrenze = 16_384,
+                kvBytesPerToken = ProcessServerSupervisor.KV_BYTES_PER_TOKEN,
+            ),
+        )
+    }
+
+    @Test
+    fun `der Schluessel-Wert-Speicher bleibt unter einem Fuenftel`() {
         // Die eigentliche Zusicherung, unabhängig von den Stufen: Was gewählt wird, darf
-        // nicht mehr als ein Drittel beanspruchen. Der Rest ist für Rechenpuffer, die App
-        // und alles, was Android sonst noch vorhat.
+        // nicht mehr als ein Fünftel beanspruchen. Der Rest ist für Rechenpuffer, die App
+        // und alles, was Android sonst noch vorhat — und die Rechenpuffer waren der Posten,
+        // der in der ersten Fassung fehlte und den Prozess kostete.
         listOf(300L, 800L, 1_600L, 3_000L, 6_000L, 12_000L).forEach { frei ->
             val gewaehlt = waehlen(frei, obergrenze = 32_768)
             val kv = gewaehlt.toLong() * ProcessServerSupervisor.KV_BYTES_PER_TOKEN
@@ -44,7 +86,7 @@ class ContextSizeTest {
             if (gewaehlt > ProcessServerSupervisor.MIN_CONTEXT_SIZE) {
                 assertTrue(
                     kv <= frei * mb / ProcessServerSupervisor.KV_ANTEIL,
-                    "$gewaehlt bei $frei MB frei: ${kv / mb} MB sind mehr als ein Drittel",
+                    "$gewaehlt bei $frei MB frei: ${kv / mb} MB sind mehr als ein Fünftel",
                 )
             }
         }

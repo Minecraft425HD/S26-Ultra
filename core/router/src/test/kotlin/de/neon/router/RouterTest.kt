@@ -103,7 +103,16 @@ class RouterTest {
         val decision = router.route(Utterance("irgendeine frage"), state)
         val generate = assertIs<RouteDecision.Generate>(decision)
         assertEquals(AnalysisSource.RUECKFALL, generate.selection.analysis.source)
-        assertEquals("qwen3-4b-instruct", generate.selection.model.id)
+
+        // Das kleine Alltagsmodell, nicht das große: Der Rückfall schätzt Komplexität 2,
+        // und bis dahin reicht das 1.7B. Hier stand vorher das 4-B-Modell, weil es das
+        // einzige Alltagsmodell war.
+        assertEquals("qwen3-1.7b-instruct", generate.selection.model.id)
+
+        // Und das ist nur vertretbar, weil nachgelegt werden darf: erst klein antworten,
+        // bei Unzufriedenheit groß. Ohne diese Zusicherung wäre die Wahl des kleinen
+        // Modells bei einer unbekannten Frage eine stille Verschlechterung.
+        assertTrue(generate.selection.allowEscalation, "ohne Eskalation ist klein zu wenig")
     }
 
     @Test

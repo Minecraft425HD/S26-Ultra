@@ -76,7 +76,7 @@ class SelectionPolicy(
 
         val strict = all.filter { eligible(it, analysis, state, relaxed = false) }
         val relaxed = strict.ifEmpty { all.filter { eligible(it, analysis, state, relaxed = true) } }
-        val pool = relaxed.ifEmpty { fallbackPool(all, analysis) }
+        val pool = relaxed.ifEmpty { fallbackPool(all, analysis, state) }
 
         val energyWeight = energyWeight(state)
         val scored = pool
@@ -122,13 +122,35 @@ class SelectionPolicy(
     }
 
     /**
-     * Letzte Rettung: Es passt buchstäblich nichts. Dann gilt nur noch, ob das Modell die
-     * nötige Fähigkeit hat — und von denen das kleinste.
+     * Letzte Rettung: Kein Modell ist regulär zulässig — etwa weil die Frage schwerer ist,
+     * als das stärkste vorhandene Modell abdeckt.
+     *
+     * **Hier stand „von denen das kleinste", und das war zu grob.** Solange es nur ein
+     * Alltagsmodell gab, fiel das nicht auf: Das kleinste war zugleich das einzige. Mit einem
+     * zweiten, kleineren Alltagsmodell beantwortete eine Logikaufgabe der Komplexität 5
+     * plötzlich das 1.7B — obwohl das 4-B-Modell in den Speicher gepasst hätte.
+     *
+     * Richtig ist: **das stärkste, das noch in den Speicher passt.** Wenn schon niemand die
+     * Aufgabe richtig abdeckt, dann soll wenigstens der beste Versuch gemacht werden. Nur
+     * wenn nichts hineinpasst, bleibt das kleinste — dann ist eine schwache Antwort immer
+     * noch besser als ein Prozess, den Android erschlägt.
      */
-    private fun fallbackPool(all: List<ModelSpec>, analysis: RouteAnalysis): List<ModelSpec> {
+    private fun fallbackPool(
+        all: List<ModelSpec>,
+        analysis: RouteAnalysis,
+        state: DeviceState,
+    ): List<ModelSpec> {
         val capable = all.filter { !analysis.needsVision || it.supports(Capability.VISION) }
         val pool = capable.ifEmpty { all }
-        return listOf(pool.minBy { it.sizeBytes })
+
+        val passend = pool.filter { state.fitsInMemory(it) }
+        val gewaehlt = passend.maxWithOrNull(
+            // Zuerst die Abdeckung, dann die Größe: Bei gleicher Abdeckung gewinnt das
+            // kleinere Modell, weil es schneller lädt und weniger Strom kostet.
+            compareBy<ModelSpec> { it.maxComplexity }.thenByDescending { it.sizeBytes },
+        ) ?: pool.minBy { it.sizeBytes }
+
+        return listOf(gewaehlt)
     }
 
     private fun energyWeight(state: DeviceState): Double = when {

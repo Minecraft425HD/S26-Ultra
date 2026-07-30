@@ -38,7 +38,8 @@ class LlamaServerEngine(
     override val loadedModelId: String? get() = currentModelId
 
     override suspend fun load(model: ModelSpec, file: File, projector: File?): Boolean = withContext(dispatcher) {
-        val client = supervisor.clientFor(model.id, file, projector) ?: return@withContext false
+        val client = supervisor.clientFor(model.id, file, projector, model.kvBytesPerToken)
+            ?: return@withContext false
         currentClient = client
         currentModelId = model.id
         true
@@ -126,6 +127,7 @@ class RunningServerSupervisor(baseUrl: String) : ServerSupervisor {
         modelId: String,
         file: File,
         projector: File?,
+        kvBytesPerToken: Long,
     ): LlamaServerClient? = if (client.isHealthy()) client else null
 
     override suspend fun shutdown() = Unit

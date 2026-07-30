@@ -14,6 +14,7 @@ class SelectionPolicyTest {
     private val registry = ModelRegistry.defaultForS26Ultra()
     private val policy = SelectionPolicy(registry)
 
+    private val kleinerAlltag = "qwen3-1.7b-instruct"
     private val alltag = "qwen3-4b-instruct"
     private val denker = "qwen3-8b-thinking"
     private val code = "qwen3-coder-7b"
@@ -49,7 +50,13 @@ class SelectionPolicyTest {
     @Test
     fun `Smalltalk landet beim kleinen Alltagsmodell`() {
         val selection = policy.select(analysis(TaskCategory.SMALLTALK, 1), state())
-        assertEquals(alltag, selection.model.id)
+
+        // Seit es zwei Alltagsmodelle gibt, ist „das kleine" das 1.7B. Genau darum wurde es
+        // aufgenommen: Auf einem Gerät mit sechs Gigabyte bleiben nur seine Gewichte im
+        // Seitencache liegen, und beim 4-B-Modell wurden dadurch 0,22 Token je Sekunde
+        // gemessen. Für eine Begrüßung das große zu wecken war schon vorher falsch — es fiel
+        // nur nicht auf, weil es keine Alternative gab.
+        assertEquals(kleinerAlltag, selection.model.id)
     }
 
     @Test

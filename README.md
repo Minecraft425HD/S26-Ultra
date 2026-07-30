@@ -55,7 +55,8 @@ gebraucht hätte. Die Grenzen liegen in der gemessenen Lücke: Umformulierungen 
 |---|---|---|---|
 | Router | Qwen3 0.6B | ~0,4 GB | dauerhaft |
 | Embeddings | EmbeddingGemma 300M | ~0,2 GB | dauerhaft |
-| Alltag | Qwen3 4B Instruct | ~2,5 GB | Standard |
+| Alltag, klein | Qwen3 1.7B | ~1,1 GB | Standard |
+| Alltag | Qwen3 4B Instruct | ~2,5 GB | ab Komplexität 3 |
 | Denker | Qwen3 8B | ~5,0 GB | auf Abruf |
 | Code | Qwen3 Coder 7B | ~4,5 GB | auf Abruf |
 | Bild | Gemma 3 4B + mmproj | ~3,1 GB | auf Abruf |
@@ -96,7 +97,7 @@ Es sind also **zwei** Budgets, weil es zwei Arten von Speicher sind:
 | Posten | Art | Grenze |
 |---|---|---|
 | Modellgewichte | `mmap`, Dateiseiten — verdrängbar | Anteil von `MemTotal` (60 %) |
-| Schlüssel-Wert-Speicher | anonym — nicht verdrängbar | Anteil von `MemAvailable` (⅓) |
+| Schlüssel-Wert-Speicher | anonym — nicht verdrängbar | Anteil von `MemAvailable` (⅕) |
 | Rechenpuffer | anonym | im Rest von `MemAvailable` |
 
 Konkret:
@@ -105,6 +106,13 @@ Konkret:
   sind das 3,2 GB: genug für das Alltagsmodell, zu wenig für 8B und Coder 7B.
 - `ProcessServerSupervisor.passendeKontextgroesse` rechnet den Schlüssel-Wert-Speicher gegen
   `MemAvailable`. Bei 1,5 GB frei ergibt das 4096 Token statt 16384 — 288 MB statt 1152.
+  Der Anteil war zuerst ein Drittel, und das war zu großzügig: Bei 1,7 GB frei erlaubte er
+  8192 Token mit 576 MB — vier Megabyte unter der eigenen Grenze —, und der Prozess wurde
+  erschlagen. Was fehlte, sind die Rechenpuffer: ebenfalls anonym, ebenfalls nicht
+  verdrängbar, für ein 4-B-Modell mehrere hundert Megabyte.
+- Die Kosten je Token hängen am Modell und stehen in `ModelSpec.kvBytesPerToken`: 73728 beim
+  4-B-Modell (36 Schichten), 57344 beim 1.7B (28 Schichten). Als Konstante war das richtig,
+  solange es ein Modell gab.
 - Der Regler in den Einstellungen ist eine **Obergrenze**, keine Zusage, und sagt daneben,
   was vom freien Speicher tatsächlich passt.
 
@@ -115,9 +123,11 @@ führt zurück zum Abschuss.
 
 > Diese Aufstellung ist ein Startpunkt, kein Ergebnis. Welche Modelle und Quantisierungen auf
 > einem gegebenen Gerät das beste Verhältnis aus Geschwindigkeit, Speicher und deutscher
-> Sprachqualität liefern, muss dort gemessen werden. Auf einem Gerät mit 6 GB RAM ist das
-> 4-B-Modell die Obergrenze und läuft nur zäh, weil die Gewichte nicht dauerhaft in den
-> Speicher passen; **Qwen3 1.7B** (etwa 1,1 GB) wäre dort das passendere Alltagsmodell.
+> Sprachqualität liefern, muss dort gemessen werden. Auf dem Testgerät mit 6 GB RAM ist das
+> 4-B-Modell die Obergrenze und bleibt zäh, weil seine Gewichte nicht im Seitencache liegen
+> bleiben — gemessen 0,22 bis 1,49 Token je Sekunde, je nachdem wie warm der Cache war.
+> Deshalb steht **Qwen3 1.7B** in der Aufstellung: 1,1 GB Gewichte und 235 MB Kontext passen
+> gleichzeitig hinein. Wie schnell es dort wirklich ist, steht noch aus.
 
 ## Akku-Strategie
 
@@ -315,8 +325,15 @@ Echte Antworten vom Sprachmodell, freihändiges Ansprechen mit „Hey Neon".
 
 ### Was weiterhin offen ist
 
-- **Messung auf dem Gerät.** Erste echte Zahlen liegen vor, und sie waren ernüchternd:
-  **0,71 Token je Sekunde** beim Erzeugen, 4,17 beim Verarbeiten. Die Ursache ließ sich an
+- **Messung auf dem Gerät.** Es läuft und antwortet. Der Befehlssatz war ein echter Posten
+  — gleicher Durchgang, gleicher Cache-Zustand: Prompt 5,01 → **9,28 T/s** (1,85×), Erzeugen
+  0,47 → **1,49 T/s** (3,2×). Trotzdem unbenutzbar, und die Zahlen sagen warum: Der erste
+  Durchgang lieferte 0,22 T/s, der zweite 1,49. Ein Faktor sieben zwischen zwei gleichen
+  Aufgaben ist kein Rechenproblem, sondern der Seitencache — die 2,4 GB Gewichte bleiben auf
+  einem 6-GB-Gerät nicht liegen. Deshalb **Qwen3 1.7B**: 1,1 GB Gewichte und 235 MB Kontext
+  passen gleichzeitig hinein. Die dortige Geschwindigkeit ist noch nicht gemessen.
+- **Frühere Fassung dieses Absatzes:**
+  0,71 Token je Sekunde beim Erzeugen, 4,17 beim Verarbeiten. Die Ursache ließ sich an
   der ausgelieferten Datei nachweisen — sie enthielt keinen einzigen `sdot`-Befehl, weil
   `GGML_CPU_ARM_ARCH` im Bauskript fehlte und llama.cpp deshalb für `armv8-a` übersetzte,
   den Grundbefehlssatz von 2011. Mit `armv8.2-a+dotprod+fp16` sind es jetzt 898 solcher
@@ -332,7 +349,7 @@ Echte Antworten vom Sprachmodell, freihändiges Ansprechen mit „Hey Neon".
 - **NPU-Pfad.** llama.cpp läuft auf CPU und GPU. Der Qualcomm-Beschleuniger bliebe ein
   weiterer Sprung bei der Akkulaufzeit.
 
-**593 Testläufe**, `:app:assembleRelease` baut, `llama-server` für arm64 ist gebaut,
+**599 Testläufe**, `:app:assembleRelease` baut, `llama-server` für arm64 ist gebaut,
 16-KB-ausgerichtet, mit Skalarprodukt-Befehlen übersetzt und gegen ein echtes Modell
 erprobt.
 

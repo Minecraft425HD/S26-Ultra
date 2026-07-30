@@ -59,8 +59,21 @@ class SpeicherHinweisTest {
 
     @Test
     fun `bei viel Speicher passt auch das groesste Fenster`() {
-        val reichlich = MemoryReading(totalBytes = 16 * gb, availableBytes = 10 * gb)
+        // 12 GB frei: Ein Fünftel davon sind 2,4 GB, und 32768 Token brauchen 2,25 GB.
+        val reichlich = MemoryReading(totalBytes = 16 * gb, availableBytes = 12 * gb)
 
         assertTrue(speicherHinweis(reichlich, 32_768).contains("passt"))
+    }
+
+    @Test
+    fun `auch reichlich Speicher hat eine Grenze`() {
+        // 10 GB frei reichen für 32768 Token nicht: Ein Fünftel sind 2,0 GB, gebraucht
+        // werden 2,25. Diese Erwartung stand vorher auf "passt" — sie hing an der
+        // Drittel-Regel, die auf dem Gerät zum Abschuss führte. Ein Test, der eine
+        // verworfene Regel festhält, hält die Regel am Leben.
+        val zehn = MemoryReading(totalBytes = 16 * gb, availableBytes = 10 * gb)
+        val text = speicherHinweis(zehn, 32_768)
+
+        assertTrue(text.contains("16384"), "die mögliche Größe fehlt: $text")
     }
 }

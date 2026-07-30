@@ -18,9 +18,17 @@ import kotlin.concurrent.thread
 interface ServerSupervisor {
     /**
      * @param projector die Projektordatei eines Bildmodells, sonst `null`.
+     * @param kvBytesPerToken was ein Token im Schlüssel-Wert-Speicher kostet. Hängt am
+     *   Modell — 73728 beim 4-B-Modell, 57344 beim 1.7B — und entscheidet über die
+     *   Kontextgröße, also darüber, ob Android den Prozess erschlägt.
      * @return ein Client für das Modell, oder `null`, wenn kein Server bereitsteht.
      */
-    suspend fun clientFor(modelId: String, file: File, projector: File? = null): LlamaServerClient?
+    suspend fun clientFor(
+        modelId: String,
+        file: File,
+        projector: File? = null,
+        kvBytesPerToken: Long = ProcessServerSupervisor.KV_BYTES_PER_TOKEN,
+    ): LlamaServerClient?
 
     suspend fun shutdown()
 
@@ -142,6 +150,7 @@ class ProcessServerSupervisor(
         modelId: String,
         file: File,
         projector: File?,
+        kvBytesPerToken: Long,
     ): LlamaServerClient? {
         if (servingModelId == modelId && isRunning) {
             client?.let { if (it.isHealthy()) return it }
@@ -185,13 +194,13 @@ class ProcessServerSupervisor(
         // Schlüssel-Wert-Speicher, und das ist anonymer Speicher, den der Kernel nicht
         // verdrängen kann. Bei 1600 MB freien war Neon damit der dickste Brocken im System.
         val gewuenscht = contextSize
-        val benutzt = passendeKontextgroesse(speicher.availableBytes, gewuenscht)
+        val benutzt = passendeKontextgroesse(speicher.availableBytes, gewuenscht, kvBytesPerToken)
         if (benutzt != gewuenscht) {
             NeonLog.i(
                 TAG,
                 "Kontext auf $benutzt statt $gewuenscht begrenzt — " +
-                    "${benutzt.toLong() * KV_BYTES_PER_TOKEN / MB} MB statt " +
-                    "${gewuenscht.toLong() * KV_BYTES_PER_TOKEN / MB} MB für den " +
+                    "${benutzt.toLong() * kvBytesPerToken / MB} MB statt " +
+                    "${gewuenscht.toLong() * kvBytesPerToken / MB} MB für den " +
                     "Schlüssel-Wert-Speicher, ${speicher.describe()}",
             )
         }
@@ -204,7 +213,7 @@ class ProcessServerSupervisor(
                 modelName = file.name,
                 modelBytes = modelBytes,
                 contextSize = benutzt,
-                kvBytes = benutzt.toLong() * KV_BYTES_PER_TOKEN,
+                kvBytes = benutzt.toLong() * kvBytesPerToken,
                 memory = speicher,
             )
         )
@@ -593,7 +602,11 @@ class ProcessServerSupervisor(
          * @param obergrenze der eingestellte Wunsch.
          * @return die zu benutzende Größe, nie größer als [obergrenze].
          */
-        fun passendeKontextgroesse(verfuegbar: Long, obergrenze: Int): Int {
+        fun passendeKontextgroesse(
+            verfuegbar: Long,
+            obergrenze: Int,
+            kvBytesPerToken: Long = KV_BYTES_PER_TOKEN,
+        ): Int {
             val grenze = obergrenze.coerceIn(MIN_CONTEXT_SIZE, MAX_CONTEXT_SIZE)
 
             // Ohne Messung nichts ändern. Eine fehlende Auskunft darf keine stille
@@ -603,7 +616,7 @@ class ProcessServerSupervisor(
 
             val erlaubt = verfuegbar / KV_ANTEIL
             return KONTEXT_STUFEN
-                .filter { it <= grenze && it.toLong() * KV_BYTES_PER_TOKEN <= erlaubt }
+                .filter { it <= grenze && it.toLong() * kvBytesPerToken <= erlaubt }
                 .maxOrNull()
                 // Passt nicht einmal die kleinste Stufe, bleibt trotzdem sie: Unter
                 // MIN_CONTEXT_SIZE passt kaum eine Seite Text, und ein Fenster, in dem
@@ -616,10 +629,24 @@ class ProcessServerSupervisor(
         val KONTEXT_STUFEN = listOf(4_096, 8_192, 16_384, 32_768)
 
         /**
-         * Wie viel des freien Speichers der Schlüssel-Wert-Speicher höchstens belegen darf:
-         * ein Drittel. Als Teiler geschrieben, damit die Rechnung in Ganzzahlen bleibt.
+         * Wie viel des freien Speichers der Schlüssel-Wert-Speicher höchstens belegen darf.
+         *
+         * **Hier stand ein Drittel, und das war zu großzügig.** Gemessen auf dem Gerät:
+         *
+         * | frei | Drittel | gewählt | KV | Ergebnis |
+         * |---|---|---|---|---|
+         * | 1,7 GB | 580 MB | 8192 | 576 MB | **vom System getötet** |
+         * | 1,9 GB | 648 MB | 8192 | 576 MB | überlebt |
+         *
+         * Vier Megabyte unter der eigenen Grenze — das war keine Entscheidung, das war
+         * Glück, und beim ersten Versuch ging es schief. Was in der Rechnung fehlte, sind
+         * die Rechenpuffer des Servers: Sie sind ebenfalls anonym und ebenfalls nicht
+         * verdrängbar, und für ein 4-B-Modell gehen sie in die hunderte Megabyte.
+         *
+         * Mit einem Fünftel wären in beiden Fällen 4096 gewählt worden. Als Teiler
+         * geschrieben, damit die Rechnung in Ganzzahlen bleibt.
          */
-        const val KV_ANTEIL = 3L
+        const val KV_ANTEIL = 5L
         private const val HEALTH_POLL_MILLIS = 250L
         private const val SHUTDOWN_TIMEOUT_MILLIS = 5_000L
     }

@@ -49,6 +49,22 @@ data class ModelSpec(
     val role: ModelRole,
     /** Dateigröße auf der Platte; zugleich die Untergrenze des RAM-Bedarfs. */
     val sizeBytes: Long,
+    /**
+     * Was ein Token im Schlüssel-Wert-Speicher kostet, bei `q8_0`.
+     *
+     * Die Rechnung: `2 * Schichten * KV-Köpfe * head_dim`, ein Byte je Element. Für Qwen3 4B
+     * sind das 2 × 36 × 8 × 128 = 73728, für Qwen3 1.7B nur 2 × 28 × 8 × 128 = 57344 — 22
+     * Prozent weniger allein wegen der Schichtenzahl.
+     *
+     * **Warum das hier steht und nicht als Konstante.** Genau daran hängt die Kontextgröße,
+     * und die entscheidet darüber, ob Android den Prozess erschlägt. Eine Konstante war
+     * richtig, solange es ein Modell gab; mit dem zweiten wäre jede Rechnung um ein Fünftel
+     * falsch — in die riskante Richtung, wenn das kleinere Modell die größere Zahl erbt.
+     *
+     * Die Vorgabe ist der Wert des Alltagsmodells, damit bestehende Einträge unverändert
+     * bleiben. Wer ein Modell hinzufügt, soll die Zahl aus seiner `config.json` ausrechnen.
+     */
+    val kvBytesPerToken: Long = 73_728,
     val capabilities: Set<Capability>,
     /** Kategorien, in denen dieses Modell besonders stark ist. */
     val strengths: Set<TaskCategory> = emptySet(),
@@ -152,6 +168,40 @@ class ModelRegistry(models: List<ModelSpec>) {
                     tokensPerSecond = 0.0,
                     loadCostMillis = 200,
                     energyPerToken = 0.05,
+                    residentByDefault = true,
+                ),
+                // Das kleine Alltagsmodell — und auf einem Gerät mit sechs Gigabyte das
+                // einzige, das wirklich schnell sein kann.
+                //
+                // Gemessen wurde mit dem 4-B-Modell: erster Durchgang 0,22 Token je
+                // Sekunde, zweiter 1,49. Ein Faktor sieben zwischen zwei gleichen Aufgaben
+                // hat nichts mit Rechenleistung zu tun — die 2,4 GB Gewichte bleiben nicht
+                // im Seitencache liegen und werden bei jedem Token neu aus Flash geholt.
+                //
+                // Dieses Modell wiegt 1,1 GB und braucht bei Kontext 4096 noch 235 MB für
+                // den Schlüssel-Wert-Speicher. Zusammen 1,3 GB, und damit bleibt es liegen.
+                ModelSpec(
+                    id = "qwen3-1.7b-instruct",
+                    displayName = "Qwen3 1.7B",
+                    role = ModelRole.ALLTAG,
+                    sizeBytes = (1.1 * GB).toLong(),
+                    // 2 * 28 Schichten * 8 KV-Köpfe * head_dim 128 — aus der config.json
+                    // nachgelesen, nicht geschätzt.
+                    kvBytesPerToken = 57_344,
+                    capabilities = setOf(Capability.TEXT, Capability.TOOL_CALLING),
+                    strengths = setOf(
+                        TaskCategory.SMALLTALK,
+                        TaskCategory.GERAETE_AKTION,
+                    ),
+                    // Bis Komplexität 2: Begrüßungen, kurze Auskünfte, Gerätebefehle. Was
+                    // darüber liegt, geht ans 4-B-Modell — falls es geladen werden kann.
+                    maxComplexity = 2,
+                    // Geschätzt, und zwar aus dem, was gemessen wurde: Sobald die Gewichte
+                    // liegen bleiben, ist die Erzeugung nicht mehr durch Flash begrenzt.
+                    // Die Zahl gehört ersetzt, sobald sie auf dem Gerät gemessen ist.
+                    tokensPerSecond = 12.0,
+                    loadCostMillis = 900,
+                    energyPerToken = 0.45,
                     residentByDefault = true,
                 ),
                 ModelSpec(
