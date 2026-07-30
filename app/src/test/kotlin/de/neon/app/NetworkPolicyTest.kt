@@ -27,7 +27,10 @@ import kotlin.test.assertTrue
  * zusammengeführte Manifest und die kompilierte Ressource. Er kann *nicht* prüfen, ob
  * Android die Regel dann auch anwendet — Robolectric hat keine echte Netzwerkrichtlinie,
  * und genau darum ist der Fehler durch alle bisherigen Tests gerutscht. Dieselbe Lücke wie
- * bei `(?U)`: Was nur auf dem Gerät gilt, findet man nur auf dem Gerät. Was hier bleibt,
+ * beim Unicode-Flag im Regex-Muster: Was nur auf dem Gerät gilt, findet man nur auf dem
+ * Gerät. Das Konstrukt selbst steht hier bewusst nicht ausgeschrieben — der Wächter in
+ * PortableRegexTest durchsucht auch Kommentare, und zu Recht: Er kann nicht wissen, ob
+ * eine Zeichenfolge ein Muster ist oder darüber redet. Was hier bleibt,
  * ist die Zusicherung, dass die Erklärung überhaupt vorhanden und richtig ist.
  */
 @RunWith(RobolectricTestRunner::class)

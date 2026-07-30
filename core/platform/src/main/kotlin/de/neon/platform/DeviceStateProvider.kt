@@ -82,35 +82,52 @@ class DeviceStateProvider(
         }
     }
 
-    /**
-     * Wie viel Speicher ein neu zu ladendes Modell noch belegen darf.
-     *
-     * **Hier stand eine Konstante: fünf Gigabyte, mit dem Kommentar „von sechzehn".** Das
-     * Gerät hat 5,3 GB *insgesamt* und meldete 1,6 GB frei. Der Router hielt also fünf
-     * Gigabyte für verfügbar, ließ das 4-B-Modell zu — und Android erschlug den Prozess
-     * beim Laden, sechsmal hintereinander. Eine Zahl, die das Gerät kennt, hat in einer
-     * Konstante nichts zu suchen.
-     *
-     * Gemessen wird `MemAvailable` und nicht `MemFree`: Letzteres ist auf Linux fast immer
-     * klein, weil der Seitencache allen ungenutzten Speicher belegt. `MemAvailable` ist die
-     * Schätzung des Kernels, wie viel sich ohne Auslagern vergeben lässt — genau die Frage,
-     * die hier zu beantworten ist.
-     *
-     * Lässt sich nichts messen, gilt der übergebene Wert. Eine fehlende Auskunft soll den
-     * Router nicht lahmlegen; sie soll ihn nur nicht belügen.
-     */
-    private fun availableForModels(): Long {
-        val gemessen = DeviceMemory.read()
-        return if (gemessen.known) gemessen.availableBytes else memoryBudgetBytes
-    }
+    /** Siehe [weightBudget]. */
+    private fun availableForModels(): Long = weightBudget(DeviceMemory.read(), memoryBudgetBytes)
 
     companion object {
         /**
+         * Wie groß die **Gewichte** eines Modells sein dürfen.
+         *
+         * Diese Zahl hat zwei Fassungen hinter sich, und beide waren falsch:
+         *
+         * 1. Eine Konstante von fünf Gigabyte, mit dem Kommentar „von sechzehn". Das Gerät
+         *    hat 5,3 GB *insgesamt*. Der Router ließ das 4-B-Modell mit einem Kontextfenster
+         *    von 16384 Token zu, und Android erschlug den Prozess sechsmal beim Laden.
+         * 2. Danach `MemAvailable` — 1,5 GB. Damit fiel das 2,5 GB schwere Alltagsmodell
+         *    durch, und Neon antwortete nach sechs Millisekunden „Dafür bräuchte ich ein
+         *    Modell, das nicht in den Speicher passt". Kein Ladeversuch mehr, auf einem
+         *    Gerät, das dasselbe Modell einen Tag zuvor geladen und beantwortet hatte.
+         *
+         * Der Denkfehler in (2): Die Gewichte werden per `mmap` eingebunden und liegen als
+         * **Dateiseiten** im Seitencache. Der Kernel darf sie jederzeit verdrängen und aus
+         * Flash nachlesen — sie müssen **nicht** in den freien Speicher passen. Was
+         * hineinpassen muss, ist der anonyme Anteil: Schlüssel-Wert-Speicher und
+         * Rechenpuffer. Darüber entscheidet `ProcessServerSupervisor.passendeKontextgroesse`
+         * gegen `MemAvailable`, und das ist die richtige Stelle dafür.
+         *
+         * Für die Gewichte zählt daher der **Gesamtspeicher**: Sie brauchen genug
+         * Seitencache, um voranzukommen. [WEIGHT_BUDGET_SHARE] lässt den Rest für One UI,
+         * die App und den anonymen Anteil übrig. Auf 5,3 GB ergibt das 3,2 GB — genug für
+         * das Alltagsmodell (2,5 GB), zu wenig für 8B (5,0 GB) und Coder 7B (4,5 GB).
+         *
+         * Als reine Funktion und nicht als private Methode, damit die Zahl geprüft werden
+         * kann. Beide falschen Fassungen sind an grünen Tests vorbeigekommen, weil genau
+         * diese Rechnung nirgends festgehalten war.
+         */
+        fun weightBudget(memory: MemoryReading, fallback: Long = FALLBACK_MODEL_BUDGET): Long =
+            if (memory.known) (memory.totalBytes * WEIGHT_BUDGET_SHARE).toLong() else fallback
+
+        /** Wie viel des Gesamtspeichers die Modellgewichte höchstens ausmachen dürfen. */
+        const val WEIGHT_BUDGET_SHARE = 0.6
+
+        /**
          * Der Rückfallwert, falls sich `/proc/meminfo` nicht lesen lässt.
          *
-         * Bewusst klein: Wer nicht weiß, wie viel Platz da ist, sollte nicht das größte
-         * Modell zulassen. Zwei Gigabyte lassen das Alltagsmodell zu und die großen nicht.
+         * Drei Gigabyte: Wer nicht weiß, wie viel Platz da ist, soll das Alltagsmodell
+         * zulassen und die großen nicht. Ein zu kleiner Rückfall führt zurück in die
+         * Verweigerung, ein zu großer in den Abschuss.
          */
-        const val FALLBACK_MODEL_BUDGET = 2L * 1024 * 1024 * 1024
+        const val FALLBACK_MODEL_BUDGET = 3L * 1024 * 1024 * 1024
     }
 }

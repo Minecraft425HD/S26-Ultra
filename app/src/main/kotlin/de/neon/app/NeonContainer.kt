@@ -112,13 +112,12 @@ class NeonContainer(context: Context) {
     val lifecycle = ModelLifecycleManager(
         engine = answerEngine,
         resolver = modelStore,
+        // Dieselbe Rechnung wie im DeviceStateProvider, und zwar buchstäblich dieselbe
+        // Funktion. Zwei Stellen mit derselben Absicht und eigener Rechnung sind eine
+        // Stelle zu viel: Die erste Fassung dieser Zahl war an beiden Orten falsch, die
+        // zweite an beiden Orten anders falsch.
         memoryBudgetBytes = {
-            val gemessen = de.neon.platform.DeviceMemory.read()
-            if (gemessen.known) {
-                gemessen.availableBytes
-            } else {
-                ModelLifecycleManager.DEFAULT_BUDGET_BYTES
-            }
+            de.neon.platform.DeviceStateProvider.weightBudget(de.neon.platform.DeviceMemory.read())
         },
     )
 

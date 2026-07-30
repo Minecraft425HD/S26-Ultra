@@ -32,4 +32,22 @@ tasks.test {
     testLogging {
         events("passed", "skipped", "failed")
     }
+
+    // `PortableRegexTest` durchsucht **alle** Kotlin-Quellen des Projekts nach Konstrukten,
+    // an denen Android beim Start scheitert. Gradle kann das nicht wissen: Es hält als
+    // Eingabe nur dieses Modul fest, erklärt die Aufgabe für aktuell und holt sie aus dem
+    // Build-Cache — der Wächter läuft dann nicht mehr.
+    //
+    // Genau das ist passiert. Ein `(?U)` in einem Doc-Kommentar in `app` blieb fünf
+    // Veröffentlichungen lang unentdeckt, weil sich in `core/router` nichts geändert hatte.
+    // Ein Wächter, der nicht läuft, ist keiner — und schlimmer als keiner, weil man sich auf
+    // ihn verlässt.
+    inputs.files(
+        fileTree(rootDir) {
+            include("**/src/**/*.kt")
+            exclude("**/build/**")
+        }
+    )
+        .withPropertyName("quelltextDesGesamtprojekts")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }

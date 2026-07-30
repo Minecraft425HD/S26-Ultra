@@ -86,15 +86,32 @@ Gewichte liegen als Dateiseiten im Cache und dürfen jederzeit verdrängt werden
 Schlüssel-Wert-Speicher nicht. Bei Kontext 16384 sind das 1152 MB anonymer Speicher — aus
 1600 MB verfügbaren.
 
-Deshalb gilt jetzt:
+Der erste Versuch, das zu beheben, war deshalb ebenfalls falsch: Wenn `MemAvailable` das
+Budget für Modelle wird, fällt das 2,5 GB schwere Alltagsmodell durch, und Neon antwortete
+nach **sechs Millisekunden** „Dafür bräuchte ich ein Modell, das nicht in den Speicher
+passt" — ohne es überhaupt zu versuchen. **Ein Absturz gegen eine Verweigerung getauscht.**
 
-- `DeviceStateProvider` und `ModelLifecycleManager` lesen `MemAvailable` aus
-  `/proc/meminfo`, statt eine Konstante zu behaupten.
-- Die Kontextgröße wird beim Serverstart aus dem freien Speicher abgeleitet
-  (`passendeKontextgroesse`): höchstens ein Drittel davon für den Schlüssel-Wert-Speicher.
-  Bei 1,6 GB frei sind das 4096 Token statt 16384.
+Es sind also **zwei** Budgets, weil es zwei Arten von Speicher sind:
+
+| Posten | Art | Grenze |
+|---|---|---|
+| Modellgewichte | `mmap`, Dateiseiten — verdrängbar | Anteil von `MemTotal` (60 %) |
+| Schlüssel-Wert-Speicher | anonym — nicht verdrängbar | Anteil von `MemAvailable` (⅓) |
+| Rechenpuffer | anonym | im Rest von `MemAvailable` |
+
+Konkret:
+
+- `DeviceStateProvider.weightBudget` leitet das Gewichtsbudget aus `MemTotal` ab. Auf 5,3 GB
+  sind das 3,2 GB: genug für das Alltagsmodell, zu wenig für 8B und Coder 7B.
+- `ProcessServerSupervisor.passendeKontextgroesse` rechnet den Schlüssel-Wert-Speicher gegen
+  `MemAvailable`. Bei 1,5 GB frei ergibt das 4096 Token statt 16384 — 288 MB statt 1152.
 - Der Regler in den Einstellungen ist eine **Obergrenze**, keine Zusage, und sagt daneben,
   was vom freien Speicher tatsächlich passt.
+
+Beide falschen Fassungen dieser Zahl kamen an grünen Tests vorbei, weil die Rechnung nirgends
+festgehalten war. `WeightBudgetTest` und `MemoryBudgetTest` prüfen sie jetzt in **beide**
+Richtungen: Ein Budget, das alles ablehnt, verhindert jede Antwort; eines, das alles zulässt,
+führt zurück zum Abschuss.
 
 > Diese Aufstellung ist ein Startpunkt, kein Ergebnis. Welche Modelle und Quantisierungen auf
 > einem gegebenen Gerät das beste Verhältnis aus Geschwindigkeit, Speicher und deutscher
@@ -315,7 +332,7 @@ Echte Antworten vom Sprachmodell, freihändiges Ansprechen mit „Hey Neon".
 - **NPU-Pfad.** llama.cpp läuft auf CPU und GPU. Der Qualcomm-Beschleuniger bliebe ein
   weiterer Sprung bei der Akkulaufzeit.
 
-**577 Testläufe**, `:app:assembleRelease` baut, `llama-server` für arm64 ist gebaut,
+**593 Testläufe**, `:app:assembleRelease` baut, `llama-server` für arm64 ist gebaut,
 16-KB-ausgerichtet, mit Skalarprodukt-Befehlen übersetzt und gegen ein echtes Modell
 erprobt.
 
