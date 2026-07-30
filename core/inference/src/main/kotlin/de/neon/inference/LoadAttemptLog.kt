@@ -1,5 +1,6 @@
 package de.neon.inference
 
+import de.neon.platform.MemoryReading
 import java.io.File
 
 /**

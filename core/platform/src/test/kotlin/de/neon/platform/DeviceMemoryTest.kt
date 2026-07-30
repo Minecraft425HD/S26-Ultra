@@ -1,4 +1,4 @@
-package de.neon.inference
+package de.neon.platform
 
 import kotlin.test.Test
 import kotlin.test.assertEquals

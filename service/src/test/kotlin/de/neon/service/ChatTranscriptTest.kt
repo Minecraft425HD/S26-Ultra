@@ -97,7 +97,15 @@ class ChatTranscriptTest {
             router = router,
             asr = asr,
             tts = tts,
-            lifecycle = ModelLifecycleManager(engine, ModelFileResolver { File("/dev/null") }),
+            lifecycle = ModelLifecycleManager(
+            engine = engine,
+            resolver = ModelFileResolver { File("/dev/null") },
+            // Ausdrücklich genannt: Der Vorgabewert der Produktion ist inzwischen klein
+            // (weil das Zielgerät nur 5,3 GB hat), und diese Tests handeln nicht von
+            // Speicher. Ein Test, der sein Budget erbt, schlägt fehl, sobald die
+            // Produktion ihres aus einem anderen Grund ändert — genau das ist passiert.
+            memoryBudgetBytes = { 16L * 1024 * 1024 * 1024 },
+        ),
             engine = engine,
             deviceState = { DeviceState.unknown() },
             actionExecutor = { null },

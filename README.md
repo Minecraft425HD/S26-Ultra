@@ -67,14 +67,40 @@ da sind, und deshalb zählt es mit der Summe beider Größen. Hier stand zuvor G
 es gar keinen Projektor gibt: eine Zeile, die ein Bildmodell benannte, mit dem Bilder
 unmöglich waren.
 
-Von 16 GB RAM belegt One UI etwa 6 GB; Neon hält höchstens 5 GB für Modelle belegt. Bei
-1 TB Speicher liegen alle gleichzeitig auf der Platte — gewechselt wird nur, was im RAM ist.
-Weil die Gewichte per `mmap` geladen werden und Linux zuletzt genutzte Seiten im Cache hält,
-kostet der Rückwechsel auf ein kürzlich benutztes Modell fast nichts.
+Alle Modelle liegen gleichzeitig auf der Platte — gewechselt wird nur, was im
+Arbeitsspeicher ist. Weil die Gewichte per `mmap` geladen werden und Linux zuletzt genutzte
+Seiten im Cache hält, kostet der Rückwechsel auf ein kürzlich benutztes Modell fast nichts.
 
-> Diese Aufstellung ist ein Startpunkt, kein Ergebnis. Welche Modelle und Quantisierungen
-> auf dem S26 Ultra wirklich das beste Verhältnis aus Geschwindigkeit, Speicher und
-> deutscher Sprachqualität liefern, muss auf dem Gerät gemessen werden.
+### Der Speicher wird gemessen, nicht angenommen
+
+Hier stand: *„Von 16 GB RAM belegt One UI etwa 6 GB; Neon hält höchstens 5 GB für Modelle
+belegt."* Dieselbe Zahl stand als Konstante im Code — an zwei Stellen.
+
+**Das Testgerät hat 5,3 GB insgesamt**, davon waren 1,6 GB frei. Neon hielt fünf Gigabyte für
+verfügbar, ließ das 4-B-Modell mit einem Kontextfenster von 16384 Token zu — und Androids
+Low-Memory-Killer beendete den Prozess beim Laden, sechsmal hintereinander, ohne eine Zeile
+Erklärung.
+
+Der entscheidende Posten ist nicht das Modell, sondern der **Schlüssel-Wert-Speicher**: Die
+Gewichte liegen als Dateiseiten im Cache und dürfen jederzeit verdrängt werden, der
+Schlüssel-Wert-Speicher nicht. Bei Kontext 16384 sind das 1152 MB anonymer Speicher — aus
+1600 MB verfügbaren.
+
+Deshalb gilt jetzt:
+
+- `DeviceStateProvider` und `ModelLifecycleManager` lesen `MemAvailable` aus
+  `/proc/meminfo`, statt eine Konstante zu behaupten.
+- Die Kontextgröße wird beim Serverstart aus dem freien Speicher abgeleitet
+  (`passendeKontextgroesse`): höchstens ein Drittel davon für den Schlüssel-Wert-Speicher.
+  Bei 1,6 GB frei sind das 4096 Token statt 16384.
+- Der Regler in den Einstellungen ist eine **Obergrenze**, keine Zusage, und sagt daneben,
+  was vom freien Speicher tatsächlich passt.
+
+> Diese Aufstellung ist ein Startpunkt, kein Ergebnis. Welche Modelle und Quantisierungen auf
+> einem gegebenen Gerät das beste Verhältnis aus Geschwindigkeit, Speicher und deutscher
+> Sprachqualität liefern, muss dort gemessen werden. Auf einem Gerät mit 6 GB RAM ist das
+> 4-B-Modell die Obergrenze und läuft nur zäh, weil die Gewichte nicht dauerhaft in den
+> Speicher passen; **Qwen3 1.7B** (etwa 1,1 GB) wäre dort das passendere Alltagsmodell.
 
 ## Akku-Strategie
 
@@ -289,7 +315,7 @@ Echte Antworten vom Sprachmodell, freihändiges Ansprechen mit „Hey Neon".
 - **NPU-Pfad.** llama.cpp läuft auf CPU und GPU. Der Qualcomm-Beschleuniger bliebe ein
   weiterer Sprung bei der Akkulaufzeit.
 
-**541 Testläufe**, `:app:assembleRelease` baut, `llama-server` für arm64 ist gebaut,
+**569 Testläufe**, `:app:assembleRelease` baut, `llama-server` für arm64 ist gebaut,
 16-KB-ausgerichtet, mit Skalarprodukt-Befehlen übersetzt und gegen ein echtes Modell
 erprobt.
 

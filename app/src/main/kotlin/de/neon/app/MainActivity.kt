@@ -302,6 +302,7 @@ class MainActivity : ComponentActivity() {
                             onWakeWordThreshold = { ready.wakeWordThreshold = it },
                             contextSize = ready.contextSize,
                             onContextSize = { ready.contextSize = it },
+                            freierSpeicher = de.neon.platform.DeviceMemory.read(),
                             onImportProjector = { modelId ->
                                 pendingImportModelId =
                                     ready.modelStore.projectorId(modelId)
@@ -478,6 +479,8 @@ private fun NeonScreen(
     onWakeWordThreshold: (Float) -> Unit,
     contextSize: Int,
     onContextSize: (Int) -> Unit,
+    /** Der gemessene freie Speicher — damit der Regler sagen kann, was davon passt. */
+    freierSpeicher: de.neon.platform.MemoryReading,
     onImportModel: (String) -> Unit,
     onImportProjector: (String) -> Unit,
     onShareLog: () -> Unit,
@@ -658,6 +661,12 @@ private fun NeonScreen(
                                 "kostet Arbeitsspeicher und macht jede Antwort langsamer.",
                             style = MaterialTheme.typography.bodySmall,
                         )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Eine Obergrenze, keine Zusage: Reicht der freie Speicher nicht, " +
+                                "nimmt Neon weniger und sagt es unten.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                         Spacer(Modifier.height(8.dp))
 
                         var kontext by remember(contextSize) { mutableFloatStateOf(contextSize.toFloat()) }
@@ -675,6 +684,11 @@ private fun NeonScreen(
                             "${kontext.toInt()} Token — etwa ${kontext.toInt() / 1000 * 750} Wörter, " +
                                 gigabytes(kontext.toInt().toLong() * ProcessServerSupervisor.KV_BYTES_PER_TOKEN) +
                                 " Arbeitsspeicher",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            speicherHinweis(freierSpeicher, kontext.toInt()),
                             style = MaterialTheme.typography.bodySmall,
                         )
                         Spacer(Modifier.height(4.dp))
@@ -846,3 +860,28 @@ private fun describe(state: NeonState): String = when (state) {
 
 private fun gigabytes(bytes: Long): String =
     "%.1f GB".format(bytes / 1024.0 / 1024.0 / 1024.0)
+
+/**
+ * Was der freie Speicher zu einer gewünschten Kontextgröße sagt.
+ *
+ * Der Anlass steht im Protokoll vom 30. Juli: Kontext 16384 verlangt 1152 MB
+ * Schlüssel-Wert-Speicher, frei waren 1,6 GB — und Android hat den Prozess sechsmal
+ * erschlagen, ohne dass irgendwo ein Zusammenhang zu sehen war. Wer den Regler bewegt, soll
+ * die Grenze sehen, bevor er sie überschreitet.
+ */
+internal fun speicherHinweis(speicher: de.neon.platform.MemoryReading, gewuenscht: Int): String {
+    if (!speicher.known) {
+        return "Freier Speicher nicht lesbar — Neon benutzt den eingestellten Wert."
+    }
+    val moeglich = de.neon.inference.ProcessServerSupervisor.passendeKontextgroesse(
+        speicher.availableBytes,
+        gewuenscht,
+    )
+    val frei = speicher.describe()
+    return if (moeglich >= gewuenscht) {
+        "$frei — das passt."
+    } else {
+        "$frei — davon passen $moeglich Token. Neon nimmt beim nächsten Start diesen Wert, " +
+            "sonst beendet Android die App."
+    }
+}

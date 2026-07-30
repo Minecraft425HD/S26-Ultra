@@ -1,4 +1,4 @@
-package de.neon.inference
+package de.neon.platform
 
 import java.io.File
 
@@ -48,7 +48,7 @@ object DeviceMemory {
      * Zerlegt `/proc/meminfo`.
      *
      * Getrennt vom Lesen, damit es sich ohne Gerät prüfen lässt — mit der echten Ausgabe
-     * eines Telefons als Vorlage. Dieselbe Aufteilung wie bei [CpuFeatures].
+     * eines Telefons als Vorlage. Dieselbe Aufteilung wie bei `CpuFeatures` in core/inference.
      *
      * Die Werte stehen in Kibibyte: `MemTotal:  11720000 kB`.
      */

@@ -1,6 +1,7 @@
 package de.neon.inference
 
 import android.content.Context
+import de.neon.platform.DeviceMemory
 import de.neon.platform.NeonLog
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -69,12 +70,17 @@ class ProcessServerSupervisor(
 ) : ServerSupervisor {
 
     /**
-     * Die Größe des Kontextfensters.
+     * Die gewünschte Größe des Kontextfensters — die **Obergrenze**, nicht die Ansage.
      *
      * Änderbar, weil der richtige Wert vom Gerät und vom Gebrauch abhängt: Wer Anhänge
      * benutzt, braucht mehr; wer nur kurz etwas fragt, verschenkt damit Arbeitsspeicher und
      * Zeit. Eine Änderung wirkt beim nächsten Serverstart — der laufende Server wird dafür
      * beendet, denn die Größe steht beim Start fest und lässt sich nicht nachjustieren.
+     *
+     * Beim Start wird der Wunsch gegen den freien Speicher geprüft und notfalls gesenkt.
+     * Ein gespeicherter Wunsch von 16384 hat die App auf einem Gerät mit 1,6 GB freiem
+     * Speicher sechsmal erschlagen — und ein Wunsch, der die App tötet, ist keiner.
+     * [laufenderKontext] sagt, was tatsächlich benutzt wird.
      */
     @Volatile
     var contextSize: Int = contextSize.coerceIn(MIN_CONTEXT_SIZE, MAX_CONTEXT_SIZE)
@@ -86,6 +92,16 @@ class ProcessServerSupervisor(
             // Neustart mitten in einer laufenden Antwort wäre das Gegenteil von hilfreich.
             servingModelId = null
         }
+
+    /**
+     * Die Kontextgröße, mit der der Server wirklich läuft.
+     *
+     * Kann kleiner sein als [contextSize], wenn der Speicher nicht mehr hergab. Für die
+     * Anzeige: Wer 4096 statt der eingestellten 16384 bekommt, soll das sehen können.
+     */
+    @Volatile
+    var laufenderKontext: Int = contextSize.coerceIn(MIN_CONTEXT_SIZE, MAX_CONTEXT_SIZE)
+        private set
 
     private var process: Process? = null
     @Volatile
@@ -163,14 +179,32 @@ class ProcessServerSupervisor(
         val speicher = DeviceMemory.read()
         NeonLog.i(TAG, "${CpuFeatures.describe()} · ${speicher.describe()}")
 
+        // Die Kontextgröße an den Speicher anpassen, der wirklich da ist.
+        //
+        // Genau hier wurde die App sechsmal erschlagen: Kontext 16384 verlangt 1152 MB
+        // Schlüssel-Wert-Speicher, und das ist anonymer Speicher, den der Kernel nicht
+        // verdrängen kann. Bei 1600 MB freien war Neon damit der dickste Brocken im System.
+        val gewuenscht = contextSize
+        val benutzt = passendeKontextgroesse(speicher.availableBytes, gewuenscht)
+        if (benutzt != gewuenscht) {
+            NeonLog.i(
+                TAG,
+                "Kontext auf $benutzt statt $gewuenscht begrenzt — " +
+                    "${benutzt.toLong() * KV_BYTES_PER_TOKEN / MB} MB statt " +
+                    "${gewuenscht.toLong() * KV_BYTES_PER_TOKEN / MB} MB für den " +
+                    "Schlüssel-Wert-Speicher, ${speicher.describe()}",
+            )
+        }
+        laufenderKontext = benutzt
+
         val modelBytes = file.length() + (projector?.length() ?: 0L)
         attemptLog.beginnen(
             LoadAttempt(
                 startedAtMillis = System.currentTimeMillis(),
                 modelName = file.name,
                 modelBytes = modelBytes,
-                contextSize = contextSize,
-                kvBytes = contextSize.toLong() * KV_BYTES_PER_TOKEN,
+                contextSize = benutzt,
+                kvBytes = benutzt.toLong() * KV_BYTES_PER_TOKEN,
                 memory = speicher,
             )
         )
@@ -222,7 +256,7 @@ class ProcessServerSupervisor(
             add("--alias"); add(model.nameWithoutExtension)
             add("--host"); add("127.0.0.1")
             add("--port"); add(port.toString())
-            add("--ctx-size"); add(contextSize.toString())
+            add("--ctx-size"); add(laufenderKontext.toString())
             add("--threads"); add(threads.toString())
 
             // Ein Telefon, ein Nutzer. llama-server legt sonst vier Bearbeitungsplätze an,
@@ -537,6 +571,55 @@ class ProcessServerSupervisor(
         /** Die Frist für ein Modell dieser Größe. */
         fun startupBudgetMillis(modelBytes: Long): Long =
             STARTUP_BASE_MILLIS + STARTUP_PER_GIGABYTE_MILLIS * modelBytes / GB
+
+        /**
+         * Die größte Kontextgröße, die in den freien Speicher passt.
+         *
+         * **Der Fehler, den das verhindert.** Der Schlüssel-Wert-Speicher ist der einzige
+         * Posten, der mit dem Kontextfenster wächst *und* nicht verdrängt werden kann. Die
+         * Modellgewichte liegen per `mmap` als Dateiseiten im Cache — die darf der Kernel
+         * jederzeit wegnehmen und neu einlesen. Anonymer Speicher nicht.
+         *
+         * Auf dem Gerät standen 1600 MB frei, und Kontext 16384 verlangte davon 1152 MB.
+         * Damit war Neon der dickste Brocken im System, und Androids Low-Memory-Killer nimmt
+         * genau den — sechsmal hintereinander, ohne eine Zeile Erklärung.
+         *
+         * **Ein Drittel** als Obergrenze, weil der Rest gebraucht wird: Rechenpuffer des
+         * Servers (einige hundert Megabyte), die App selbst, die Sprachausgabe, und etwas
+         * Luft für alles, was Android sonst noch vorhat. Zwei Drittel wären knapp
+         * gerechnet, die Hälfte wäre eine Wette.
+         *
+         * @param verfuegbar freier Speicher in Byte; `0` heißt „nicht gemessen".
+         * @param obergrenze der eingestellte Wunsch.
+         * @return die zu benutzende Größe, nie größer als [obergrenze].
+         */
+        fun passendeKontextgroesse(verfuegbar: Long, obergrenze: Int): Int {
+            val grenze = obergrenze.coerceIn(MIN_CONTEXT_SIZE, MAX_CONTEXT_SIZE)
+
+            // Ohne Messung nichts ändern. Eine fehlende Auskunft darf keine stille
+            // Verschlechterung auslösen — sonst kürzt Neon auf jedem Gerät, dessen
+            // /proc/meminfo sich nicht lesen lässt, grundlos das Kontextfenster.
+            if (verfuegbar <= 0) return grenze
+
+            val erlaubt = verfuegbar / KV_ANTEIL
+            return KONTEXT_STUFEN
+                .filter { it <= grenze && it.toLong() * KV_BYTES_PER_TOKEN <= erlaubt }
+                .maxOrNull()
+                // Passt nicht einmal die kleinste Stufe, bleibt trotzdem sie: Unter
+                // MIN_CONTEXT_SIZE passt kaum eine Seite Text, und ein Fenster, in dem
+                // nichts mehr steht, ist keine Rettung. Dann soll der Abschuss sichtbar
+                // werden statt in einer unbrauchbaren Einstellung zu verschwinden.
+                ?: MIN_CONTEXT_SIZE
+        }
+
+        /** Die Stufen, zwischen denen gewählt wird — dieselben wie am Regler. */
+        val KONTEXT_STUFEN = listOf(4_096, 8_192, 16_384, 32_768)
+
+        /**
+         * Wie viel des freien Speichers der Schlüssel-Wert-Speicher höchstens belegen darf:
+         * ein Drittel. Als Teiler geschrieben, damit die Rechnung in Ganzzahlen bleibt.
+         */
+        const val KV_ANTEIL = 3L
         private const val HEALTH_POLL_MILLIS = 250L
         private const val SHUTDOWN_TIMEOUT_MILLIS = 5_000L
     }

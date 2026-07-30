@@ -57,10 +57,28 @@ class ModelLifecycleManagerTest {
         if (spec.id in missing) null else File("/dev/null")
     }
 
+    /**
+     * Ein Manager mit **ausdrücklich genanntem** Speicherbudget.
+     *
+     * Vorher nahmen diese Tests den Vorgabewert der Produktion — und als der von fünf auf
+     * zwei Gigabyte fiel, schlugen zwei Tests fehl, die von Speicher gar nicht handeln. Ein
+     * Test über Verdrängungsreihenfolge darf nicht an einer Zahl hängen, die aus einem
+     * anderen Grund geändert wird. Wer das Budget prüfen will, nennt es hier.
+     */
+    private fun manager(
+        engine: InferenceEngine = FakeEngine(),
+        missing: Set<String> = emptySet(),
+        budgetGb: Double = 8.0,
+    ) = ModelLifecycleManager(
+        engine = engine,
+        resolver = resolver(missing),
+        memoryBudgetBytes = { (budgetGb * 1024 * 1024 * 1024).toLong() },
+    )
+
     @Test
     fun `laedt ein Modell und meldet es als bereit`() = runTest {
         val engine = FakeEngine()
-        val manager = ModelLifecycleManager(engine, resolver())
+        val manager = manager(engine)
 
         val result = manager.ensureLoaded(klein)
         val ready = assertIs<ModelLifecycleManager.Result.Ready>(result)
@@ -72,7 +90,7 @@ class ModelLifecycleManagerTest {
     @Test
     fun `laedt ein bereits geladenes Modell nicht erneut`() = runTest {
         val engine = FakeEngine()
-        val manager = ModelLifecycleManager(engine, resolver())
+        val manager = manager(engine)
 
         manager.ensureLoaded(klein)
         val result = manager.ensureLoaded(klein)
@@ -87,7 +105,7 @@ class ModelLifecycleManagerTest {
         // Zwei große Modelle gleichzeitig im Speicher sind auf einem Telefon der
         // zuverlässigste Weg, vom Low-Memory-Killer abgeräumt zu werden.
         val engine = FakeEngine()
-        val manager = ModelLifecycleManager(engine, resolver())
+        val manager = manager(engine)
 
         manager.ensureLoaded(klein)
         manager.ensureLoaded(gross)
@@ -98,21 +116,41 @@ class ModelLifecycleManagerTest {
 
     @Test
     fun `lehnt Modelle ueber dem Speicherbudget ab`() = runTest {
-        val manager = ModelLifecycleManager(FakeEngine(), resolver())
-        val result = manager.ensureLoaded(riesig)
+        // Hier ist das Budget die Sache selbst, also steht es ausdrücklich da: Vier
+        // Gigabyte reichen für "gross" (4,5 GB) nicht.
+        val manager = manager(budgetGb = 4.0)
+        val result = manager.ensureLoaded(gross)
         assertIs<ModelLifecycleManager.Result.TooLarge>(result)
+        assertEquals(4L * 1024 * 1024 * 1024, result.budgetBytes)
+    }
+
+    @Test
+    fun `fragt das Budget bei jedem Versuch neu`() = runTest {
+        // Was frei ist, ändert sich — deshalb ist das Budget eine Funktion und keine Zahl.
+        // Auf dem Gerät stand eine Konstante von fünf Gigabyte, während 1,6 GB frei waren.
+        var frei = 1L * 1024 * 1024 * 1024
+        val manager = ModelLifecycleManager(
+            engine = FakeEngine(),
+            resolver = resolver(),
+            memoryBudgetBytes = { frei },
+        )
+
+        assertIs<ModelLifecycleManager.Result.TooLarge>(manager.ensureLoaded(klein))
+
+        frei = 8L * 1024 * 1024 * 1024
+        assertIs<ModelLifecycleManager.Result.Ready>(manager.ensureLoaded(klein))
     }
 
     @Test
     fun `meldet fehlende Modelldateien statt abzustuerzen`() = runTest {
-        val manager = ModelLifecycleManager(FakeEngine(), resolver(missing = setOf("klein")))
+        val manager = manager(missing = setOf("klein"))
         val result = manager.ensureLoaded(klein)
         assertIs<ModelLifecycleManager.Result.Missing>(result)
     }
 
     @Test
     fun `meldet einen Ladefehler als Ergebnis statt als Ausnahme`() = runTest {
-        val manager = ModelLifecycleManager(FakeEngine(loadSucceeds = false), resolver())
+        val manager = manager(FakeEngine(loadSucceeds = false))
         val result = manager.ensureLoaded(klein)
         assertIs<ModelLifecycleManager.Result.Failed>(result)
         // Der Dienst muss weiterlaufen und den Nutzer informieren können.
@@ -121,7 +159,7 @@ class ModelLifecycleManagerTest {
 
     @Test
     fun `merkt sich kuerzlich benutzte Modelle als warm`() = runTest {
-        val manager = ModelLifecycleManager(FakeEngine(), resolver())
+        val manager = manager()
 
         manager.ensureLoaded(klein)
         manager.ensureLoaded(gross)
@@ -135,7 +173,7 @@ class ModelLifecycleManagerTest {
 
     @Test
     fun `vergisst laengst nicht benutzte Modelle wieder`() = runTest {
-        val manager = ModelLifecycleManager(FakeEngine(), resolver())
+        val manager = manager()
 
         listOf(klein, gross, model("a", 1.0), model("b", 1.0), model("c", 1.0))
             .forEach { manager.ensureLoaded(it) }
@@ -146,7 +184,7 @@ class ModelLifecycleManagerTest {
     @Test
     fun `Vorladen meldet Erfolg wenn das Modell schon da ist`() = runTest {
         val engine = FakeEngine()
-        val manager = ModelLifecycleManager(engine, resolver())
+        val manager = manager(engine)
 
         manager.ensureLoaded(klein)
         assertTrue(manager.preload(klein))
@@ -156,7 +194,7 @@ class ModelLifecycleManagerTest {
     @Test
     fun `entlaedt alles auf Wunsch`() = runTest {
         val engine = FakeEngine()
-        val manager = ModelLifecycleManager(engine, resolver())
+        val manager = manager(engine)
 
         manager.ensureLoaded(klein)
         manager.unloadAll()

@@ -112,7 +112,15 @@ class ConversationOrchestratorTest {
         onEntry: ((ChatEntry) -> Unit)? = null,
     ): Pair<ConversationOrchestrator, InMemoryRouteOutcomeStore> {
         val resolver = ModelFileResolver { if (modelsAvailable) File("/dev/null") else null }
-        val lifecycle = ModelLifecycleManager(engine, resolver)
+        val lifecycle = ModelLifecycleManager(
+            engine = engine,
+            resolver = resolver,
+            // Ausdrücklich genannt: Der Vorgabewert der Produktion ist inzwischen klein
+            // (weil das Zielgerät nur 5,3 GB hat), und diese Tests handeln nicht von
+            // Speicher. Ein Test, der sein Budget erbt, schlägt fehl, sobald die
+            // Produktion ihres aus einem anderen Grund ändert — genau das ist passiert.
+            memoryBudgetBytes = { 16L * 1024 * 1024 * 1024 },
+        )
         val router = Router(registry, SelectionPolicy(registry), routerLlm = routerLlm)
 
         return ConversationOrchestrator(

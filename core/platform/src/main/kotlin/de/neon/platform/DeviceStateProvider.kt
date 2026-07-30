@@ -27,8 +27,12 @@ class DeviceStateProvider(
      * damit ein Aufrufer, der das nicht setzt, sich wie bisher verhält.
      */
     private val availableModelIds: (() -> Set<String>)? = null,
-    /** Wie viel Speicher Modelle noch belegen dürfen. */
-    private val memoryBudgetBytes: Long = DEFAULT_MODEL_BUDGET,
+    /**
+     * Rückfallwert, falls sich der freie Speicher nicht messen lässt.
+     *
+     * Nicht mehr das Budget selbst: Das wird gemessen. Siehe [availableForModels].
+     */
+    private val memoryBudgetBytes: Long = FALLBACK_MODEL_BUDGET,
 ) {
 
     private val batteryManager = context.getSystemService<BatteryManager>()
@@ -81,14 +85,32 @@ class DeviceStateProvider(
     /**
      * Wie viel Speicher ein neu zu ladendes Modell noch belegen darf.
      *
-     * Nicht der freie Systemspeicher: Android meldet auch Speicher als frei, den es beim
-     * Zugriff erst durch Abräumen anderer Apps beschaffen müsste. Ein festes Budget ist
-     * die ehrlichere Grenze.
+     * **Hier stand eine Konstante: fünf Gigabyte, mit dem Kommentar „von sechzehn".** Das
+     * Gerät hat 5,3 GB *insgesamt* und meldete 1,6 GB frei. Der Router hielt also fünf
+     * Gigabyte für verfügbar, ließ das 4-B-Modell zu — und Android erschlug den Prozess
+     * beim Laden, sechsmal hintereinander. Eine Zahl, die das Gerät kennt, hat in einer
+     * Konstante nichts zu suchen.
+     *
+     * Gemessen wird `MemAvailable` und nicht `MemFree`: Letzteres ist auf Linux fast immer
+     * klein, weil der Seitencache allen ungenutzten Speicher belegt. `MemAvailable` ist die
+     * Schätzung des Kernels, wie viel sich ohne Auslagern vergeben lässt — genau die Frage,
+     * die hier zu beantworten ist.
+     *
+     * Lässt sich nichts messen, gilt der übergebene Wert. Eine fehlende Auskunft soll den
+     * Router nicht lahmlegen; sie soll ihn nur nicht belügen.
      */
-    private fun availableForModels(): Long = memoryBudgetBytes
+    private fun availableForModels(): Long {
+        val gemessen = DeviceMemory.read()
+        return if (gemessen.known) gemessen.availableBytes else memoryBudgetBytes
+    }
 
     companion object {
-        /** Fünf Gigabyte von sechzehn — der Rest gehört One UI, Audio und der App selbst. */
-        const val DEFAULT_MODEL_BUDGET = 5L * 1024 * 1024 * 1024
+        /**
+         * Der Rückfallwert, falls sich `/proc/meminfo` nicht lesen lässt.
+         *
+         * Bewusst klein: Wer nicht weiß, wie viel Platz da ist, sollte nicht das größte
+         * Modell zulassen. Zwei Gigabyte lassen das Alltagsmodell zu und die großen nicht.
+         */
+        const val FALLBACK_MODEL_BUDGET = 2L * 1024 * 1024 * 1024
     }
 }

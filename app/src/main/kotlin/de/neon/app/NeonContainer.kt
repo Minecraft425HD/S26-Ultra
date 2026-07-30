@@ -102,7 +102,25 @@ class NeonContainer(context: Context) {
 
     private val answerEngine = LlamaServerEngine(serverSupervisor)
 
-    val lifecycle = ModelLifecycleManager(answerEngine, modelStore)
+    /**
+     * Das Speicherbudget kommt aus der Messung, nicht aus einer Konstante.
+     *
+     * Bei jedem Ladeversuch neu gefragt: Was frei ist, hängt davon ab, was sonst läuft.
+     * Vorher standen hier fünf Gigabyte mit der Begründung „von 16 GB" — auf einem Gerät mit
+     * 5,3 GB insgesamt.
+     */
+    val lifecycle = ModelLifecycleManager(
+        engine = answerEngine,
+        resolver = modelStore,
+        memoryBudgetBytes = {
+            val gemessen = de.neon.platform.DeviceMemory.read()
+            if (gemessen.known) {
+                gemessen.availableBytes
+            } else {
+                ModelLifecycleManager.DEFAULT_BUDGET_BYTES
+            }
+        },
+    )
 
     private val deviceStateProvider = DeviceStateProvider(
         context = appContext,
