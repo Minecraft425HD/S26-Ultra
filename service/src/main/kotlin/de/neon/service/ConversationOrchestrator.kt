@@ -133,6 +133,17 @@ class ConversationOrchestrator(
     private val historyLimit: Int = DEFAULT_HISTORY_LIMIT,
     /** Bekommt jede Zeile des Verlaufs, damit sie einen Neustart überdauern kann. */
     private val onEntry: ((ChatEntry) -> Unit)? = null,
+    /**
+     * Wohin Meldungen über einen Durchgang gehen.
+     *
+     * Eine Funktion und nicht `NeonLog`: Diese Klasse ist absichtlich frei von Android, damit
+     * der ganze Ablauf mit Attrappen prüfbar bleibt — ohne Mikrofon, ohne Modelle, ohne
+     * Gerät. Ein direkter Aufruf von `android.util.Log` hat genau das gebrochen, und
+     * dreiundzwanzig Tests haben es sofort gemeldet.
+     *
+     * Der Container hängt `NeonLog` daran. In Tests bleibt es still.
+     */
+    private val log: (String) -> Unit = {},
 ) {
 
     /**
@@ -483,6 +494,8 @@ class ConversationOrchestrator(
         val answer = StringBuilder()
         val pending = StringBuilder()
         var tokens = 0
+        // Wie viel der gefilterten Antwort schon ans Sprechen weitergegeben wurde.
+        var gesprochen = 0
         var failure: String? = null
 
         engine.generate(
@@ -513,7 +526,20 @@ class ConversationOrchestrator(
                 is GenerationChunk.Token -> {
                     tokens++
                     answer.append(chunk.text)
-                    pending.append(chunk.text)
+
+                    // Gesprochen wird nur, was nach dem Filtern übrig bleibt.
+                    //
+                    // Ein Denkblock wird dabei zurückgehalten, bis er geschlossen ist:
+                    // Solange `<think>` offen steht, liefert der Filter nichts, und Neon
+                    // schweigt statt seine Überlegungen vorzulesen. Deshalb wird über den
+                    // gesamten bisherigen Text gefiltert und mitgezählt, wie viel davon
+                    // schon gesprochen wurde — nicht über das letzte Stück, das für sich
+                    // genommen nicht verrät, ob es in einem Block steckt.
+                    val sichtbar = ThinkingFilter.strip(answer.toString())
+                    if (sichtbar.length > gesprochen) {
+                        pending.append(sichtbar, gesprochen, sichtbar.length)
+                        gesprochen = sichtbar.length
+                    }
 
                     // Sobald ein ganzer Satz steht, wird er gesprochen. Bei rund zwanzig
                     // Token je Sekunde ist das der Unterschied zwischen einem Gespräch und
@@ -542,9 +568,32 @@ class ConversationOrchestrator(
         val latency = clock() - startedAt
         record(transcript, selection.analysis, selection.model.id, latency, tokens)
 
+        val sichtbareAntwort = ThinkingFilter.strip(answer.toString())
+
+        // Der Fall, der auf dem Gerät wie "die Frage wurde nicht beantwortet" aussah: Der
+        // Server rechnet, meldet Token, beendet sauber — und übrig bleibt nichts, weil alles
+        // Überlegung war. Eine leere Sprechblase erklärt das nicht; dieser Satz tut es.
+        if (sichtbareAntwort.isBlank()) {
+            log(
+                "Antwort war nach dem Filtern leer — $tokens Token, $latency ms, " +
+                    "Modell ${selection.model.id}"
+            )
+            return speakProblem(
+                transcript,
+                "Ich habe nachgedacht, aber keine Antwort zustande gebracht. Frag noch einmal.",
+                selection.reason,
+                startedAt,
+            )
+        }
+
+        log(
+            "Antwort fertig — ${selection.model.id}, $tokens Token, $latency ms, " +
+                "${sichtbareAntwort.length} Zeichen"
+        )
+
         return TurnReport(
             transcript = transcript,
-            answer = answer.toString().trim(),
+            answer = sichtbareAntwort,
             modelId = selection.model.id,
             routeReason = selection.reason,
             latencyMs = latency,

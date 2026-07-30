@@ -304,6 +304,10 @@ class NeonContainer(context: Context) {
                     .onFailure { NeonLog.e(TAG, "Verlauf nicht speicherbar", it) }
             }
         },
+        // Damit ein Durchgang im Protokoll steht. Bisher stand dort, was llama-server tat,
+        // aber nichts darüber, was Neon mit dem Ergebnis machte — und deshalb liess sich
+        // nicht sagen, warum von zwei Fragen nur eine beantwortet wurde.
+        log = { meldung -> NeonLog.i("NeonTurn", meldung) },
     )
 
     init {

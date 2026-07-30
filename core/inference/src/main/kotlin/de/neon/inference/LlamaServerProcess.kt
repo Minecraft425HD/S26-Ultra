@@ -2,6 +2,7 @@ package de.neon.inference
 
 import android.content.Context
 import de.neon.platform.DeviceMemory
+import de.neon.router.Capability
 import de.neon.platform.NeonLog
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -17,17 +18,20 @@ import kotlin.concurrent.thread
  */
 interface ServerSupervisor {
     /**
+     * @param model das Modell selbst und nicht nur seine Kennung.
+     *
+     *   Der Server braucht mehrere Angaben daraus: die Kosten je Token im
+     *   Schlüssel-Wert-Speicher (73728 beim 4-B-Modell, 57344 beim 1.7B), von denen die
+     *   Kontextgröße abhängt, und ob das Modell zum Schlussfolgern gedacht ist. Diese
+     *   Aufzählung wuchs; ab drei Einzelwerten ist der Spezifikation selbst mitzugeben
+     *   einfacher als sie stückweise auseinanderzunehmen.
      * @param projector die Projektordatei eines Bildmodells, sonst `null`.
-     * @param kvBytesPerToken was ein Token im Schlüssel-Wert-Speicher kostet. Hängt am
-     *   Modell — 73728 beim 4-B-Modell, 57344 beim 1.7B — und entscheidet über die
-     *   Kontextgröße, also darüber, ob Android den Prozess erschlägt.
      * @return ein Client für das Modell, oder `null`, wenn kein Server bereitsteht.
      */
     suspend fun clientFor(
-        modelId: String,
+        model: de.neon.router.ModelSpec,
         file: File,
         projector: File? = null,
-        kvBytesPerToken: Long = ProcessServerSupervisor.KV_BYTES_PER_TOKEN,
     ): LlamaServerClient?
 
     suspend fun shutdown()
@@ -147,11 +151,12 @@ class ProcessServerSupervisor(
     val currentModelId: String? get() = servingModelId
 
     override suspend fun clientFor(
-        modelId: String,
+        model: de.neon.router.ModelSpec,
         file: File,
         projector: File?,
-        kvBytesPerToken: Long,
     ): LlamaServerClient? {
+        val modelId = model.id
+        val kvBytesPerToken = model.kvBytesPerToken
         if (servingModelId == modelId && isRunning) {
             client?.let { if (it.isHealthy()) return it }
         }
@@ -218,7 +223,7 @@ class ProcessServerSupervisor(
             )
         )
 
-        val started = runCatching { launch(file, projector) }.getOrElse {
+        val started = runCatching { launch(file, projector, model) }.getOrElse {
             NeonLog.e(TAG, "llama-server ließ sich nicht starten", it)
             attemptLog.gelungen()
             return null
@@ -258,11 +263,11 @@ class ProcessServerSupervisor(
         opfer.forEach { pid -> runCatching { android.os.Process.killProcess(pid) } }
     }
 
-    private fun launch(model: File, projector: File?): Process {
+    private fun launch(modelFile: File, projector: File?, spec: de.neon.router.ModelSpec): Process {
         val command = buildList {
             add(binary.absolutePath)
-            add("--model"); add(model.absolutePath)
-            add("--alias"); add(model.nameWithoutExtension)
+            add("--model"); add(modelFile.absolutePath)
+            add("--alias"); add(modelFile.nameWithoutExtension)
             add("--host"); add("127.0.0.1")
             add("--port"); add(port.toString())
             add("--ctx-size"); add(laufenderKontext.toString())
@@ -289,6 +294,20 @@ class ProcessServerSupervisor(
             // Die Chat-Vorlage aus der GGUF-Datei benutzen, statt eine zu raten. Ohne das
             // sieht ein Modell mit ungewöhnlicher Vorlage einen falsch formatierten Prompt.
             add("--jinja")
+
+            // Denken abschalten — außer beim Denkmodell.
+            //
+            // `--reasoning` steht in der Voreinstellung auf `auto`, und das heißt: Was die
+            // Vorlage vorsieht. Qwen3 sieht Denken vor. Damit beginnt jede Antwort mit einem
+            // `<think>`-Block, der Token kostet, ungefiltert in der Sprechblase landet und
+            // vorgelesen wird.
+            //
+            // Auf diesem Gerät entstehen rund anderthalb Token je Sekunde. Vierzig Token
+            // Selbstgespräch sind dort keine Feinheit, sondern der Unterschied zwischen
+            // einer Antwort und keiner. Das Denkmodell ist genau dafür da und behält es.
+            if (!spec.supports(Capability.REASONING)) {
+                add("--reasoning"); add("off")
+            }
             // Die eingebaute Weboberfläche wird nie benutzt und kostet nur Speicher.
             add("--no-webui")
         }
