@@ -205,6 +205,35 @@ selbst) und misst am Ende nach. Und die CI prüft **jede** `lib/arm64-v8a/*.so` 
 APK, nicht nur die selbstgebaute — damit fällt derselbe Fehler auch bei einer künftigen
 Abhängigkeit vor der Auslieferung auf statt danach.
 
+## Android-Werkzeuge auf dem Telefon
+
+Damit Neon eine Android-App **bauen** kann, braucht es `aapt2`, den Ressourcen-Compiler. Ohne
+ihn gibt es kein kompiliertes `AndroidManifest.xml` und damit keine APK — er ist die Sperre auf
+diesem Weg.
+
+Das Android SDK liefert `aapt2` nur als x86-64-Linux-Programm; für arm64-Android existiert es
+offiziell nicht. `scripts/fetch-android-tools.sh` holt ihn samt Abhängigkeiten aus dem
+Termux-Depot, gegen **festgenagelte Prüfsummen**, und zieht die zwei Dinge gerade, die einer
+fremden Binärdatei im Weg stehen:
+
+- Der `RUNPATH` zeigt auf Termux' eigenes Verzeichnis, wo eine andere App nicht hinkommt. Er
+  wird auf `$ORIGIN` gesetzt — genau dorthin entpackt Android die mitgelieferten Bibliotheken.
+- Zwei Abhängigkeiten heißen `libz.so.1` und `libexpat.so.1`. Androids Installer entpackt nur
+  Dateien, deren Name auf `.so` **endet**; versionierte Namen bleiben im APK liegen und werden
+  nie gefunden. Sie werden umbenannt, und die Verweise darauf mit.
+
+Anschließend prüft das Skript sein eigenes Ergebnis: 16-KB-Seiten, keine versionierten
+Verweise, keine fehlende Abhängigkeit. **Gemessen**, nicht vermutet — ein älterer `aapt2`-Bau
+aus dem Android-11-Zeitalter war auf 4 KB ausgerichtet und wäre auf dem Zielgerät nicht
+startbar gewesen. Von 104 mitgelieferten Bibliotheken bleiben die 53 übrig, die vom
+transitiven Abschluss ab `aapt2` erreichbar sind.
+
+Die Dateien liegen **nicht** im Repository — anders als `llama-server` sind sie kein
+Bauergebnis, sondern ein Download. Die CI ruft das Skript vor dem APK-Bau auf; damit steht die
+Herkunft an einer einzigen Stelle. `AndroidToolsPinTest` hält fest, dass jedes Paket eine
+vollständige SHA-256-Summe und eine feste Fassung hat, denn im ersten Entwurf standen bei acht
+von neun Paketen leere Prüfsummen und das Skript nahm es hin.
+
 ## Wenn etwas schiefgeht
 
 Auf einem Telefon ohne Entwicklungsumgebung ist ein Fehler sonst eine Sackgasse: Android

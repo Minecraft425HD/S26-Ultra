@@ -80,6 +80,18 @@ jobs:
             exit 1
           }
 
+      - name: Android-Werkzeuge für das Telefon holen
+        # aapt2 ist der Ressourcen-Compiler; ohne ihn kann Neon auf dem Telefon keine APK
+        # bauen. Das Android SDK liefert ihn nur als x86-64-Linux-Programm, deshalb kommt
+        # er samt Abhängigkeiten aus dem Termux-Depot — gegen festgenagelte Prüfsummen.
+        #
+        # Anders als llama-server liegen diese Dateien **nicht** im Repository: Sie sind
+        # ein Download, kein Bauergebnis. Hier zu holen hält die Herkunft an einer
+        # einzigen Stelle, nämlich den Prüfsummen im Skript.
+        run: |
+          sudo apt-get install -y patchelf
+          ./scripts/fetch-android-tools.sh
+
       - name: APK bauen
         run: ./gradlew :app:assembleRelease --stacktrace
 

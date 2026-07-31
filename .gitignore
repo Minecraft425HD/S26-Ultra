@@ -18,6 +18,15 @@ captures/
 *.litertlm
 *.bin
 
+# Die Android-Werkzeuge, die Neon zum Bauen einer App braucht.
+#
+# aapt2 und seine Abhängigkeiten holt scripts/fetch-android-tools.sh gegen festgenagelte
+# Prüfsummen aus dem Termux-Depot, und die CI ruft das Skript vor dem APK-Bau auf. Anders
+# als llama-server sind sie **kein** Bauergebnis, sondern ein Download — elf Megabyte
+# fremder Binärdateien in der Versionsgeschichte wären nur eine zweite Wahrheit neben den
+# Prüfsummen.
+app/src/main/jniLibs/arm64-v8a/*.so
+
 # Das gebaute llama-server-Programm ist ausdrücklich Teil des Repositories: Ohne es
 # könnte niemand ohne NDK eine funktionierende APK bauen — und genau das ist das Ziel.
 !app/src/main/jniLibs/arm64-v8a/libllama-server.so
