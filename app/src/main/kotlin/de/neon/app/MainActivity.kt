@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -176,6 +177,20 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Randlos zeichnen — und zwar ausgesprochen, nicht geerbt.
+        //
+        // **Der Fehler, den das behebt.** Beim Antippen des Eingabefelds rutschte es doppelt
+        // so hoch wie die Tastatur. Der Grund war eine Verdopplung: Ohne diesen Aufruf steht
+        // `decorFitsSystemWindows` auf `true`, und dann verkleinert Android das Fenster
+        // selbst um die Tastaturhöhe. `Modifier.imePadding()` in `ChatScreen` legte dieselbe
+        // Höhe ein zweites Mal obendrauf.
+        //
+        // Beides gleichzeitig ist immer falsch — entweder das Fenster wird verkleinert, oder
+        // die Oberfläche legt Abstand ein. Ab Android 15 ist randloses Zeichnen ohnehin
+        // vorgeschrieben; es hier hinzuschreiben macht aus einer Vorgabe, die sich zwischen
+        // Fassungen verschiebt, eine Entscheidung.
+        enableEdgeToEdge()
 
         // Zuerst nachsehen, ob der letzte Start abgestürzt ist. Dieser Zweig darf nichts
         // vom Container brauchen — sonst stürbe er am selben Fehler, den er anzeigen soll.

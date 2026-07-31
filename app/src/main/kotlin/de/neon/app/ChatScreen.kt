@@ -10,10 +10,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -83,8 +84,17 @@ fun ChatScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .imePadding()
-            .navigationBarsPadding(),
+            // Ein einziger Abstand für alles, was den Bildschirm verdeckt.
+            //
+            // **Der Fehler, den das behebt.** Hier stand `.imePadding().navigationBarsPadding()`.
+            // Das ist eine Verdopplung, die man nicht sieht, solange die Tastatur zu ist: Der
+            // Tastaturbereich reicht bis zum unteren Bildschirmrand und schließt die
+            // Navigationsleiste ein. Deren Höhe wurde also ein zweites Mal aufgeschlagen.
+            //
+            // `safeDrawing` ist die Vereinigung aus Systemleisten, Aussparung und Tastatur —
+            // **eine** Größe, die sich nicht mit sich selbst addieren kann. Nebenbei behebt
+            // das eine Lücke: Die Statusleiste oben hat vorher niemand berücksichtigt.
+            .windowInsetsPadding(WindowInsets.safeDrawing),
     ) {
         Kopfzeile(
             state = state,

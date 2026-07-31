@@ -168,3 +168,23 @@ dependencies {
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
 }
+
+tasks.withType<Test>().configureEach {
+    // `WindowInsetsTest` sieht in den Quelltexten und im Manifest nach, statt eine Tastatur
+    // auszuprobieren, die es unter Robolectric nicht gibt. Gradle hält als Eingabe die
+    // **kompilierten** Klassen fest — eine Änderung, die nur einen Kommentar oder eine
+    // Modifier-Kette betrifft, kann daran vorbeigehen, und die Aufgabe kommt aus dem
+    // Build-Cache zurück, ohne gelaufen zu sein.
+    //
+    // Genau das ist in diesem Projekt schon passiert: Ein `(?U)` in einem Doc-Kommentar blieb
+    // fünf Veröffentlichungen lang unentdeckt. Ein Wächter, der nicht läuft, ist schlimmer
+    // als keiner, weil man sich auf ihn verlässt.
+    inputs.files(
+        fileTree(projectDir) {
+            include("src/main/kotlin/**/*.kt")
+            include("src/main/AndroidManifest.xml")
+        }
+    )
+        .withPropertyName("quelltextUndManifestDerApp")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}

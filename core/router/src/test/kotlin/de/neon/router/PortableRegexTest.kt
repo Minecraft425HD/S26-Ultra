@@ -104,7 +104,7 @@ class PortableRegexTest {
             // Definition selbst muss irgendwo stehen dürfen.
             .filterNot { it.name == "PortableRegex.kt" || it.name == "PortableRegexTest.kt" }
             .flatMap { datei ->
-                datei.readLines().mapIndexedNotNull { index, zeile ->
+                codezeilen(datei.readText()).mapIndexedNotNull { index, zeile ->
                     PortableRegex.incompatibility(zeile)
                         ?.let { "${datei.relativeTo(wurzel)}:${index + 1}: $it" }
                 }
@@ -117,6 +117,38 @@ class PortableRegexTest {
         )
     }
 
+    /**
+     * Das Abschneiden der Kommentare macht den Wächter nicht blind.
+     *
+     * Der wichtigste Test dieser Datei, seit der Wächter Kommentare überspringt: Eine
+     * Abschwächung, die niemand nachprüft, ist eine Abschaltung mit Umweg. Geprüft wird
+     * beides — dass Kommentare durchgehen **und** dass Code weiterhin auffällt.
+     */
+    @Test
+    fun `Kommentare gehen durch, Code nicht`() {
+        val quelle = """
+            |/**
+            | * Erklaert, warum (?U) hier verboten ist.
+            | */
+            |val harmlos = "abc"
+            |val schuldig = Regex("(?U)\\blicht\\b")
+            |val auchHarmlos = 1 // (?U) im Zeilenkommentar
+        """.trimMargin()
+
+        val zeilen = codezeilen(quelle)
+
+        // Die Zeilennummern müssen erhalten bleiben, sonst zeigt die Meldung ins Leere.
+        assertEquals(6, zeilen.size, zeilen.toString())
+
+        val gemeldet = zeilen.mapIndexedNotNull { index, zeile ->
+            PortableRegex.incompatibility(zeile)?.let { index + 1 }
+        }
+
+        // Nur Zeile 5 — der echte Fund. Nicht Zeile 2 (Blockkommentar), nicht Zeile 6
+        // (Zeilenkommentar).
+        assertEquals(listOf(5), gemeldet, "gemeldet: $gemeldet in $zeilen")
+    }
+
     @Test
     fun `der Quelltext-Test findet die Wurzel und sieht wirklich Dateien an`() {
         // Ohne diese Prüfung könnte der Test oben grün sein, weil er nichts gelesen hat.
@@ -126,6 +158,68 @@ class PortableRegexTest {
             .count()
 
         assertTrue(anzahl > 50, "nur $anzahl Kotlin-Dateien gefunden — die Wurzel stimmt nicht")
+    }
+
+    /**
+     * Die Zeilen einer Datei ohne ihre Kommentare, bei gleicher Zeilennummerierung.
+     *
+     * **Warum das nachgetragen wurde.** Dieser Wächter hat zweimal auf einen Doc-Kommentar
+     * angeschlagen, der das verbotene Konstrukt **benannte**, um vor ihm zu warnen. Beim
+     * ersten Mal wurde der Kommentar umformuliert — die bequeme Antwort, aber die falsche:
+     * Ein Wächter, der Prosa liest, verbietet damit die Erklärung des Fehlers, den er
+     * verhindern soll. Beim zweiten Mal war es der Kommentar eines anderen Wächters, der
+     * genau dasselbe erklärte.
+     *
+     * Ein Konstrukt in einem Kommentar bringt Android nicht zum Absturz. Es zu melden ist ein
+     * Fehlalarm, und Fehlalarme kosten am Ende die Glaubwürdigkeit des Alarms.
+     *
+     * Blockkommentare werden **leer geschrieben statt entfernt**: Ihre Zeilenumbrüche bleiben
+     * stehen, sonst verschiebt sich jede Zeilennummer danach — und eine Meldung, die auf die
+     * falsche Zeile zeigt, ist fast so schlecht wie keine.
+     *
+     * Bewusst grob: Eine Kommentareröffnung, die in einer Zeichenkette steht, schneidet zu
+     * viel weg. Das kann nur dazu führen, dass ein Fund entgeht, der in einer Zeichenkette
+     * **dahinter** steht — ein seltener Fall, und der Preis dafür, dass sich Fehler erklären
+     * lassen.
+     *
+     * Und noch eine Fußangel, die beim Schreiben dieses Kommentars zugeschnappt ist: Kotlin
+     * erlaubt **verschachtelte** Blockkommentare. Eine Eröffnungsfolge hier hineinzuschreiben
+     * öffnet eine zweite Ebene, die das abschließende Zeichenpaar dann nur wieder zumacht —
+     * der Rest der Datei verschwindet im Kommentar. Deshalb steht sie hier in Worten.
+     */
+    private fun codezeilen(inhalt: String): List<String> {
+        val code = StringBuilder(inhalt.length)
+        var stelle = 0
+        var imBlock = false
+
+        while (stelle < inhalt.length) {
+            val zeichen = inhalt[stelle]
+            val folgt = inhalt.getOrNull(stelle + 1)
+
+            when {
+                imBlock && zeichen == '*' && folgt == '/' -> {
+                    imBlock = false
+                    stelle += 2
+                }
+
+                imBlock -> {
+                    if (zeichen == '\n') code.append('\n')
+                    stelle++
+                }
+
+                zeichen == '/' && folgt == '*' -> {
+                    imBlock = true
+                    stelle += 2
+                }
+
+                else -> {
+                    code.append(zeichen)
+                    stelle++
+                }
+            }
+        }
+
+        return code.toString().lines().map { it.substringBefore("//") }
     }
 
     private fun projektWurzel(): File {
