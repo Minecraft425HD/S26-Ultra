@@ -46,6 +46,10 @@ import de.neon.speech.AndroidOnDeviceAsr
 import de.neon.speech.AndroidTts
 import de.neon.tools.CalendarEventTool
 import de.neon.tools.WorkspaceToolset
+import de.neon.workspace.AndroidBuild
+import de.neon.workspace.BuildTools
+import de.neon.workspace.DalvikRunner
+import de.neon.workspace.ProcessCommandRunner
 import de.neon.workspace.PythonRuntime
 import de.neon.workspace.Workspace
 import de.neon.tools.ComposeMessageTool
@@ -345,7 +349,93 @@ class NeonContainer(context: Context) {
      * enthält: `datei-schreiben` neben `termin` zu stellen heißt, dass ein 4-B-Modell bei
      * einer Wissensfrage gelegentlich eine Datei anlegt.
      */
-    private val codeTools get() = ToolRegistry(WorkspaceToolset.alle(workspace, python))
+    private val codeTools get() = ToolRegistry(WorkspaceToolset.alle(workspace, python, build))
+
+    /**
+     * Die zuletzt gebaute APK, falls es eine gibt.
+     *
+     * Im Bauverzeichnis nachgesehen und nicht gemerkt: Ein gemerkter Pfad zeigt nach einem
+     * Neustart der App auf eine Datei, die es vielleicht nicht mehr gibt — und ein Knopf,
+     * der ins Leere führt, ist schlechter als keiner.
+     */
+    fun letzteApk(): File? =
+        File(workspace.wurzel, de.neon.workspace.AndroidBuild.BAU_VERZEICHNIS)
+            .listFiles { f -> f.extension == "apk" && !f.name.startsWith("unsigniert") }
+            ?.maxByOrNull { it.lastModified() }
+
+    /**
+     * Die Bau-Kette für Android-Apps.
+     *
+     * `null`, solange die Werkzeuge nicht ausgepackt sind — dann fehlen `app-anlegen` und
+     * `app-bauen` in der Grammatik. Dieselbe Regel wie bei Python: Ein Werkzeug, das jedes
+     * Mal scheitert, ist schlechter als keines.
+     */
+    @Volatile
+    var build: AndroidBuild? = null
+        private set
+
+    /**
+     * Packt die Bau-Werkzeuge aus und stellt die Kette bereit.
+     *
+     * Die Java-Werkzeuge liegen als Dex-Archive in den Assets und müssen ins
+     * Datenverzeichnis: `dalvikvm` braucht einen Dateipfad, und in einer APK steckende
+     * Assets haben keinen. Rund 48 MB, deshalb einmal und nicht bei jedem Start —
+     * derselbe Merkdatei-Mechanismus wie bei der Python-Standardbibliothek.
+     */
+    fun richteBauKetteEin(bauStand: String) {
+        val ziel = File(appContext.filesDir, "buildtools")
+        val marke = File(ziel, ".fassung")
+
+        val teile = listOf(
+            "d8.dex.jar", "kotlinc.dex.jar", "apksigner.dex.jar",
+            "android.jar", "kotlin-stdlib.jar", "annotations.jar", "debug.keystore",
+        )
+
+        runCatching {
+            if (!marke.isFile || marke.readText() != bauStand) {
+                ziel.deleteRecursively()
+                ziel.mkdirs()
+                teile.forEach { name ->
+                    appContext.assets.open(name).use { quelle ->
+                        File(ziel, name).outputStream().use { quelle.copyTo(it) }
+                    }
+                }
+                // Zuletzt die Marke. Bricht das Kopieren vorher ab, gilt es als nicht getan.
+                marke.writeText(bauStand)
+                NeonLog.i(TAG, "Bau-Werkzeuge ausgepackt (${teile.size} Dateien)")
+            }
+        }.onFailure {
+            NeonLog.e(TAG, "Bau-Werkzeuge liessen sich nicht auspacken", it)
+            return
+        }
+
+        val werkzeuge = BuildTools(
+            // aapt2 ist ein Programm und kommt aus jniLibs — im Datenverzeichnis duerfte es
+            // nicht ausgefuehrt werden.
+            aapt2 = File(appContext.applicationInfo.nativeLibraryDir, "libaapt2.so"),
+            d8 = File(ziel, "d8.dex.jar"),
+            kotlinc = File(ziel, "kotlinc.dex.jar"),
+            apksigner = File(ziel, "apksigner.dex.jar"),
+            androidJar = File(ziel, "android.jar"),
+            kotlinStdlib = File(ziel, "kotlin-stdlib.jar"),
+            annotations = File(ziel, "annotations.jar"),
+            keystore = File(ziel, "debug.keystore"),
+        )
+
+        val fehlt = werkzeuge.fehlend()
+        if (fehlt.isNotEmpty()) {
+            NeonLog.e(TAG, "Bau-Kette unvollstaendig: ${fehlt.joinToString()}")
+            return
+        }
+
+        build = AndroidBuild(
+            tools = werkzeuge,
+            runner = ProcessCommandRunner(),
+            java = DalvikRunner(cacheDir = File(appContext.cacheDir, "dalvik")),
+            log = { meldung -> NeonLog.i("NeonBuild", meldung) },
+        )
+        NeonLog.i(TAG, "Bau-Kette bereit")
+    }
 
     val orchestrator = ConversationOrchestrator(
         router = router,

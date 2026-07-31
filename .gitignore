@@ -53,3 +53,13 @@ app/src/main/assets/python-stdlib.zip
 # waeren nur eine Kopie mit eigenem Alterungsverhalten.
 app/src/main/assets/d8.dex.jar
 app/src/main/assets/apksigner.dex.jar
+app/src/main/assets/kotlinc.dex.jar
+app/src/main/assets/kotlin-stdlib.jar
+app/src/main/assets/annotations.jar
+app/src/main/assets/android.jar
+
+# Der Schluessel, mit dem gebaute Apps signiert werden. Er entsteht beim ersten Lauf des
+# Skripts und ist ausdruecklich keine Sicherheitsgrenze -- Android weigert sich, eine
+# unsignierte APK zu installieren, und er erfuellt nur diese Formvorschrift. Trotzdem gehoert
+# ein Schluessel nicht ins Repository: Wer ihn dort ablegt, gewoehnt sich daran.
+app/src/main/assets/debug.keystore

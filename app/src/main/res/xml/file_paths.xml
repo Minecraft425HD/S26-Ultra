@@ -8,4 +8,13 @@
 -->
 <paths>
     <cache-path name="geteilt" path="geteilt/" />
+
+    <!--
+      Die gebauten Apps.
+
+      Ohne diesen Eintrag weist der FileProvider die APK ab, und zwar mit einer
+      IllegalArgumentException über einen Pfad, der "nicht konfiguriert" sei — eine Meldung,
+      die nicht verrät, welche Datei gemeint ist.
+    -->
+    <files-path name="projekt" path="projekt/" />
 </paths>

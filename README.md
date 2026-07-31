@@ -261,6 +261,48 @@ wirklich drin sind **und** dass die Testsuite wirklich draußen ist.
 die 67 Erweiterungsmodule. Eine einzige falsch ausgerichtete davon hätte genau ein Modul
 abgerissen, und das fällt erst beim `import` auf.
 
+## Eine Android-App auf dem Telefon bauen
+
+Neon kann ein Android-Projekt anlegen, den Quelltext ändern, es übersetzen und die fertige APK
+zur Installation anbieten — alles auf dem Gerät, ohne Rechner.
+
+Die Kette hat fünf Schritte, und keiner lässt sich weglassen:
+
+| Schritt | Werkzeug | Woher |
+|---|---|---|
+| Ressourcen übersetzen und verknüpfen | `aapt2` | Termux-Depot, festgenagelt |
+| Quelltext übersetzen | Kotlin-Compiler | Maven Central, vor-dext |
+| Klassen zu Dex | `d8` | Android SDK, vor-dext |
+| Signieren | `apksigner` | Android SDK, vor-dext |
+| Installieren | Systemdialog | `REQUEST_INSTALL_PACKAGES` |
+
+**Warum die Java-Werkzeuge vor-dext mitkommen.** Android führt keinen Java-Bytecode aus,
+sondern Dex; eine JAR-Datei ist dort so unbrauchbar wie eine Textdatei. Und Dex erzeugt man mit
+`d8` — also mit genau dem Programm, das umgewandelt werden soll. Der Ausweg ist, das in der CI
+zu tun: `d8` wandelt sich selbst um, einmal. Gemessen: 18 MB werden in 25 Sekunden zu 3,4 MB,
+der Kotlin-Compiler 57 MB in 67 Sekunden zu 16 MB.
+
+**Warum jeder Schritt ein eigener Prozess ist.** Dieselbe Überlegung wie bei `llama-server` und
+Python: Der Kotlin-Compiler braucht viel Speicher und kann abstürzen, und `d8` ruft im
+Fehlerfall `System.exit` auf. In den App-Prozess geladen nähme ein Tippfehler im Quelltext des
+Nutzers den Assistenten mit. Gestartet werden sie über `dalvikvm`.
+
+**Was die Vorlage abnimmt.** Ein Android-Projekt hat vier Dateien, die exakt stimmen müssen,
+bevor überhaupt etwas übersetzt wird. Ein 4-B-Modell schreibt davon drei richtig und eine
+falsch, und bei 15 Token je Sekunde kostet jeder Anlauf Minuten. `AndroidProjectTemplate` legt
+Manifest, Ressourcen und eine Start-Activity an, die mit `android.jar` und `kotlin-stdlib`
+übersetzbar sind — keine XML-Layouts, kein Compose, keine Bibliothek, die erst geladen werden
+müsste.
+
+**Grenzen, ausgesprochen.** Die gebauten Apps bauen ihre Oberfläche im Code. Compose bräuchte
+ein Compiler-Plugin und ein Dutzend Bibliotheken; Abhängigkeiten aus Maven lassen sich nicht
+nachladen, weil es kein Gradle gibt. Der Schlüssel zum Signieren liegt offen in der App und ist
+ausdrücklich keine Sicherheitsgrenze: Android weigert sich, eine unsignierte APK zu
+installieren, und er erfüllt nur diese Formvorschrift.
+
+Die APK wächst dadurch auf rund 116 MB. Der größte Posten sind die Plattform-Klassen
+(`android.jar`, 27 MB) und der Kotlin-Compiler (16 MB).
+
 ## Wenn etwas schiefgeht
 
 Auf einem Telefon ohne Entwicklungsumgebung ist ein Fehler sonst eine Sackgasse: Android

@@ -56,6 +56,15 @@ fun EditorScreen(
     speichere: (String, String) -> Unit,
     /** Stellt eine Frage zu einem markierten Abschnitt. */
     frage: (frage: String, selection: String) -> Unit,
+    /**
+     * Die zuletzt gebaute APK, falls es eine gibt.
+     *
+     * Sie entsteht im Gespräch („bau die App"), nicht hier — dieser Bildschirm bietet nur
+     * die Installation an. Ohne diesen Knopf läge das Ergebnis eines minutenlangen
+     * Bauvorgangs in einem Verzeichnis, an das man ohne Dateimanager nicht herankommt.
+     */
+    gebauteApk: java.io.File?,
+    onInstallieren: (java.io.File) -> Unit,
     onZurueck: () -> Unit,
 ) {
     var offen by remember { mutableStateOf<String?>(null) }
@@ -79,6 +88,12 @@ fun EditorScreen(
         ) {
             Column {
                 Text("Projekt", style = MaterialTheme.typography.titleMedium)
+                gebauteApk?.let {
+                    Text(
+                        "gebaut: ${it.name}, ${it.length() / 1024} KB",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
                 offen?.let {
                     Text(
                         if (geaendert) "$it — ungespeichert" else it,
@@ -86,7 +101,12 @@ fun EditorScreen(
                     )
                 }
             }
-            TextButton(onClick = onZurueck) { Text("Zum Chat") }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                gebauteApk?.let { apk ->
+                    TextButton(onClick = { onInstallieren(apk) }) { Text("Installieren") }
+                }
+                TextButton(onClick = onZurueck) { Text("Zum Chat") }
+            }
         }
         HorizontalDivider()
 

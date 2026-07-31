@@ -258,6 +258,12 @@ class MainActivity : ComponentActivity() {
                                         zeigeEditor = false
                                         sendText(ready, frage, auswahl)
                                     },
+                                    gebauteApk = ready.letzteApk(),
+                                    onInstallieren = { apk ->
+                                        ApkInstaller.anbieten(this@MainActivity, apk)?.let {
+                                            NeonLog.e("MainActivity", it)
+                                        }
+                                    },
                                     onZurueck = { zeigeEditor = false },
                                 )
                             } else if (!zeigeDiagnose) {

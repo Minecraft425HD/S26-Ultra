@@ -102,8 +102,100 @@ for eintrag in "${WERKZEUGE[@]}"; do
     log "  $(du -h "$ziel" | cut -f1), $einstieg gefunden"
 done
 
-log "fertig:"
-for eintrag in "${WERKZEUGE[@]}"; do
-    IFS='|' read -r name _ <<<"$eintrag"
-    printf '    %-20s %s\n' "$name.dex.jar" "$(du -h "$ASSETS/$name.dex.jar" | cut -f1)"
+# Der Kotlin-Compiler.
+#
+# Er kommt aus Maven Central und nicht aus dem SDK — dort gibt es ihn nicht. Festgenagelt
+# gegen eine Prüfsumme, wie alles Fremde in diesem Projekt.
+#
+# Gemessen: 57 MB werden in 67 Sekunden zu 16 MB Dex. Deutlich weniger, als ich geschätzt
+# hatte; die Plattform-Klassen sind am Ende der dickere Posten.
+KOTLIN_VERSION="${KOTLIN_VERSION:-2.1.0}"
+MAVEN="https://repo1.maven.org/maven2"
+CACHE="${TOOLCHAIN_CACHE:-$ROOT/.toolchain}"
+mkdir -p "$CACHE"
+
+# name|pfad in Maven|SHA-256|Einstiegsklasse oder leer, wenn nur Klassenpfad
+MAVEN_TEILE=(
+    "kotlinc|org/jetbrains/kotlin/kotlin-compiler-embeddable/$KOTLIN_VERSION/kotlin-compiler-embeddable-$KOTLIN_VERSION.jar|c1b139a6f251c3b99e92befa326cb75d93a001d74c3ac601155a8cdb0d253783|org.jetbrains.kotlin.cli.jvm.K2JVMCompiler"
+    "kotlin-stdlib|org/jetbrains/kotlin/kotlin-stdlib/$KOTLIN_VERSION/kotlin-stdlib-$KOTLIN_VERSION.jar|d6f91b7b0f306cca299fec74fb7c34e4874d6f5ec5b925a0b4de21901e119c3f|"
+    "annotations|org/jetbrains/annotations/13.0/annotations-13.0.jar|ace2a10dc8e2d5fd34925ecac03e4988b2c0f851650c94b8cef49ba1bd111478|"
+)
+
+for eintrag in "${MAVEN_TEILE[@]}"; do
+    IFS='|' read -r name pfad summe einstieg <<<"$eintrag"
+    quelle="$CACHE/$(basename "$pfad")"
+
+    if [[ ! -f "$quelle" ]]; then
+        log "hole $name"
+        curl -sSL --fail --max-time 600 -o "$quelle" "$MAVEN/$pfad" \
+            || die "$name ließ sich nicht holen: $MAVEN/$pfad"
+    fi
+
+    ist="$(sha256sum "$quelle" | cut -d' ' -f1)"
+    [[ "$ist" == "$summe" ]] || die "Prüfsumme von $name stimmt nicht.
+     erwartet: $summe
+     erhalten: $ist"
+
+    if [[ -z "$einstieg" ]]; then
+        # Ein reiner Klassenpfad-Bestandteil. Er wird **nicht** gedext: Der Kotlin-Compiler
+        # liest ihn als Java-Bytecode, um dagegen zu übersetzen. Eine Dex-Fassung wäre für
+        # diesen Zweck unbrauchbar.
+        cp -f "$quelle" "$ASSETS/$name.jar"
+        log "  $name.jar $(du -h "$ASSETS/$name.jar" | cut -f1) (Klassenpfad, ungedext)"
+        continue
+    fi
+
+    ziel="$ASSETS/$name.dex.jar"
+    log "wandle $name um ($(du -h "$quelle" | cut -f1)) — das dauert etwa eine Minute"
+    rm -f "$ziel"
+    "$D8" --release --min-api "$MIN_API" --lib "$PLATTFORM" --output "$ziel" "$quelle" \
+        || die "$name ließ sich nicht in Dex umwandeln."
+
+    pfad_klasse="${einstieg//./\/}"
+    rm -rf "$ROOT/.toolchain-probe" && mkdir -p "$ROOT/.toolchain-probe"
+    unzip -q -o "$ziel" -d "$ROOT/.toolchain-probe"
+    treffer=$(grep -ac "$pfad_klasse" "$ROOT/.toolchain-probe"/classes*.dex 2>/dev/null \
+        | awk -F: '{s+=$NF} END{print s+0}')
+    rm -rf "$ROOT/.toolchain-probe"
+
+    (( treffer > 0 )) || die "In $ziel steht die Einstiegsklasse $einstieg nicht."
+    log "  $(du -h "$ziel" | cut -f1), $einstieg gefunden"
 done
+
+# Die Plattform-Klassen. Gegen sie übersetzt der Kotlin-Compiler, und aapt2 braucht sie zum
+# Auflösen der Ressourcen-Verweise. Ungedext, aus demselben Grund wie kotlin-stdlib.
+log "Plattform-Klassen übernehmen"
+cp -f "$PLATTFORM" "$ASSETS/android.jar"
+log "  android.jar $(du -h "$ASSETS/android.jar" | cut -f1)"
+
+# Ein Schlüssel zum Signieren der gebauten Apps.
+#
+# **Ausdrücklich keine Sicherheitsgrenze.** Android weigert sich, eine unsignierte APK zu
+# installieren; irgendein Schlüssel muss also her. Dieser liegt offen in der App, und das ist
+# richtig so: Er beglaubigt nichts, er erfüllt nur eine Formvorschrift. Wer eine hier gebaute
+# App weitergeben will, signiert sie mit einem eigenen Schlüssel.
+#
+# Dieselbe Überlegung wie beim Schlüssel dieses Projekts, und aus demselben Grund
+# hingeschrieben: Ein Schlüssel ohne diesen Satz daneben wird irgendwann für einen echten
+# gehalten.
+if [[ ! -f "$ASSETS/debug.keystore" ]]; then
+    log "Schlüssel zum Signieren erzeugen"
+    command -v keytool >/dev/null || die "keytool fehlt (JDK nötig)."
+    keytool -genkeypair -v \
+        -keystore "$ASSETS/debug.keystore" \
+        -storepass neonneon -keypass neonneon \
+        -alias neon-build -keyalg RSA -keysize 2048 -validity 10950 \
+        -dname "CN=Neon On-Device Build, OU=Neon, O=Neon, C=DE" \
+        >/dev/null 2>&1 \
+        || die "Der Signierschlüssel ließ sich nicht erzeugen."
+    log "  debug.keystore erzeugt"
+fi
+
+log "fertig:"
+for datei in "$ASSETS"/d8.dex.jar "$ASSETS"/apksigner.dex.jar "$ASSETS"/kotlinc.dex.jar \
+             "$ASSETS"/kotlin-stdlib.jar "$ASSETS"/annotations.jar "$ASSETS"/android.jar \
+             "$ASSETS"/debug.keystore; do
+    [[ -f "$datei" ]] && printf '    %-22s %s\n' "$(basename "$datei")" "$(du -h "$datei" | cut -f1)"
+done
+printf '    %-22s %s\n' "zusammen" \
+    "$(du -ch "$ASSETS"/*.jar "$ASSETS"/debug.keystore 2>/dev/null | tail -1 | cut -f1)"

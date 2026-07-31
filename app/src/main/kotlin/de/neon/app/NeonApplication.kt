@@ -78,7 +78,13 @@ class NeonApplication : Application() {
                 //
                 // Der Baustand dient als Fassungskennung: Er ändert sich genau dann, wenn
                 // sich das mitgelieferte ZIP geändert haben kann.
-                Thread({ built.richtePythonEin(bauStand) }, "neon-python-setup").apply {
+                Thread({
+                    built.richtePythonEin(bauStand)
+                    // Und die Bau-Werkzeuge, rund 48 MB. Nacheinander im selben Faden: Zwei
+                    // gleichzeitige Auspackvorgänge auf denselben Flash-Speicher sind nicht
+                    // schneller, nur unübersichtlicher im Protokoll.
+                    built.richteBauKetteEin(bauStand)
+                }, "neon-werkzeuge-setup").apply {
                     isDaemon = true
                     start()
                 }
