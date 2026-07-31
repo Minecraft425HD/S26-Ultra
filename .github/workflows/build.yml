@@ -92,6 +92,12 @@ jobs:
           sudo apt-get install -y patchelf
           ./scripts/fetch-android-tools.sh
 
+      - name: Python-Umgebung für das Telefon holen
+        # Offizielles CPython von python.org — seit 3.13 ist Android eine unterstützte
+        # Plattform. Selbst zu bauen würde zwanzig Minuten je Runde kosten und dasselbe
+        # ergeben, nur ohne Gegenzeichnung.
+        run: ./scripts/fetch-python.sh
+
       - name: APK bauen
         run: ./gradlew :app:assembleRelease --stacktrace
 

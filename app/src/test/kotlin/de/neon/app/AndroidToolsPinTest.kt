@@ -120,6 +120,68 @@ class AndroidToolsPinTest {
         )
     }
 
+    /**
+     * Auch die Python-Umgebung ist festgenagelt.
+     *
+     * Sie kommt von python.org und damit von der bestmöglichen Stelle — aber „von einer guten
+     * Stelle" ist keine Prüfung. Ohne feste Fassung und Prüfsumme wäre die APK von einer
+     * Datei abhängig, die sich jederzeit ändern kann.
+     */
+    @Test
+    fun `die Python-Umgebung hat Fassung und Pruefsumme`() {
+        val python = File(wurzel(), "scripts/fetch-python.sh")
+        assertTrue(python.isFile, "${python.path} fehlt")
+        val text = python.readText()
+
+        val fassung = Regex("""PYTHON_VERSION="\$\{PYTHON_VERSION:-([0-9]+\.[0-9]+\.[0-9]+)}"""")
+        assertTrue(fassung.containsMatchIn(text), "keine festgenagelte Python-Fassung")
+
+        val summe = Regex("""PYTHON_SHA256="([0-9a-f]{64})"""")
+        assertTrue(summe.containsMatchIn(text), "keine vollständige SHA-256-Summe für Python")
+
+        // Die Selbstprüfungen. Ohne sie wäre es ein Sprung ins Dunkle: Eine einzelne falsch
+        // ausgerichtete Erweiterung reißt genau ein Modul ab, und zwar erst beim Import.
+        assertTrue(text.contains("16384"), "die Prüfung auf 16-KB-Seiten fehlt")
+        assertTrue(text.contains("Vollständigkeit"), "die Prüfung der Standardbibliothek fehlt")
+    }
+
+    /**
+     * Kein `grep -q` in einer Pipeline unter `pipefail`.
+     *
+     * **Zum zweiten Mal in diesem Projekt.** `grep -q` beendet sich beim ersten Treffer, das
+     * Glied davor bekommt ein SIGPIPE, und unter `set -o pipefail` scheitert die ganze
+     * Pipeline — der Treffer ist da, die Prüfung meldet "fehlt". Beim ersten Mal war es die
+     * Commit-Prüfung in `build-llama-server.sh`, die daraufhin den falschen Programmstand
+     * meldete. Beim zweiten Mal war es die Vollständigkeitsprüfung in `fetch-python.sh`, und
+     * sie meldete alle sechs Module auf einmal als fehlend.
+     *
+     * Die Falle war zwischen den beiden Vorfällen ausführlich dokumentiert — eine Datei
+     * weiter. Ein Kommentar hat also nicht gereicht. Ein Test schon.
+     */
+    @Test
+    fun `kein Skript verlaesst sich auf grep -q in einer Pipeline`() {
+        val skripte = File(wurzel(), "scripts").listFiles { f -> f.extension == "sh" }.orEmpty()
+        assertTrue(skripte.size >= 3, "nur ${skripte.size} Skripte gefunden")
+
+        val treffer = skripte.flatMap { datei ->
+            datei.readLines().mapIndexedNotNull { index, zeile ->
+                val code = zeile.substringBefore('#')
+                if (code.contains("|") && Regex("""grep\s+(-\w*q\w*)""").containsMatchIn(code)) {
+                    "${datei.name}:${index + 1}: ${zeile.trim()}"
+                } else {
+                    null
+                }
+            }
+        }
+
+        assertTrue(
+            treffer.isEmpty(),
+            "grep -q in einer Pipeline unter pipefail — der Treffer wäre da, die Prüfung " +
+                "meldete trotzdem einen Fehlschlag. `grep -c` liest seine Eingabe zu Ende:\n" +
+                treffer.joinToString("\n"),
+        )
+    }
+
     private fun wurzel(): File {
         var verzeichnis = File("").absoluteFile
         while (!File(verzeichnis, "settings.gradle.kts").exists()) {

@@ -234,6 +234,33 @@ Herkunft an einer einzigen Stelle. `AndroidToolsPinTest` hält fest, dass jedes 
 vollständige SHA-256-Summe und eine feste Fassung hat, denn im ersten Entwurf standen bei acht
 von neun Paketen leere Prüfsummen und das Skript nahm es hin.
 
+## Python auf dem Telefon
+
+Seit Python 3.13 ist Android eine offiziell unterstützte Plattform, und python.org
+veröffentlicht fertige Bauten dafür — mit Signatur daneben. `scripts/fetch-python.sh` holt
+CPython 3.14.6 für aarch64 gegen eine festgenagelte Prüfsumme.
+
+Selbst zu bauen wäre möglich (`./android.py build arm64-v8a`), würde aber zwanzig Minuten je
+CI-Runde kosten und am Ende dasselbe ergeben — nur mit schlechterer Herkunft: Ein selbst
+gebautes CPython ist von niemandem gegengezeichnet, dieses schon.
+
+Zwei Wege in die APK, aus einem Grund:
+
+- Die großen Bibliotheken (`libpython3.14.so`, OpenSSL, SQLite) gehen nach `jniLibs`. Der
+  Installer entpackt sie dorthin, wo der Linker sie findet.
+- Die Standardbibliothek geht als ZIP nach `assets`. Sie besteht aus über dreitausend Dateien,
+  darunter 67 Erweiterungsmodule, deren Namen nicht mit `lib` beginnen — der Installer würde
+  sie gar nicht auspacken. Neon entpackt das ZIP beim ersten Start einmal in sein
+  Datenverzeichnis.
+
+Ausgelassen werden Testsuite, `idlelib`, `tkinter` und `turtledemo`: rund 25 MB, die auf einem
+Telefon nichts tun. Das Skript prüft anschließend beides — dass die sechs wichtigsten Module
+wirklich drin sind **und** dass die Testsuite wirklich draußen ist.
+
+**Alle 80 mitgelieferten Bibliotheken sind auf 16-KB-Seiten ausgerichtet, gemessen** — auch
+die 67 Erweiterungsmodule. Eine einzige falsch ausgerichtete davon hätte genau ein Modul
+abgerissen, und das fällt erst beim `import` auf.
+
 ## Wenn etwas schiefgeht
 
 Auf einem Telefon ohne Entwicklungsumgebung ist ein Fehler sonst eine Sackgasse: Android

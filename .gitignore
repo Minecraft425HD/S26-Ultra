@@ -36,3 +36,8 @@ tools/train-wakeword/recordings/
 tools/train-wakeword/.venv/
 
 !gradle/wrapper/gradle-wrapper.jar
+
+# Die Python-Umgebung holt scripts/fetch-python.sh von python.org, gegen eine festgenagelte
+# Prüfsumme, und die CI ruft das Skript vor dem APK-Bau auf. Sieben Megabyte Standardbibliothek
+# in der Versionsgeschichte wären nur eine zweite Wahrheit neben der Prüfsumme.
+app/src/main/assets/python-stdlib.zip
