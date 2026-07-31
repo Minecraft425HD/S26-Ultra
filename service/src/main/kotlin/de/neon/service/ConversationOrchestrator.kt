@@ -205,6 +205,16 @@ class ConversationOrchestrator(
     private var speakThisTurn: Boolean = true
 
     /**
+     * Der markierte Abschnitt dieses Durchgangs, falls es einen gibt.
+     *
+     * Als Feld und aus demselben Grund wie [speakThisTurn]: Es ist eine Eigenschaft des
+     * ganzen Durchgangs und müsste sonst durch fünf Funktionen durchgereicht werden. Es läuft
+     * immer nur ein Durchgang — dafür sorgt die Sperre.
+     */
+    @Volatile
+    private var selectionThisTurn: String? = null
+
+    /**
      * Der Verlauf, wie er *vor* dieser Frage aussah.
      *
      * Muss festgehalten werden, bevor die neue Frage in den Verlauf wandert — sonst stünde
@@ -318,9 +328,17 @@ class ConversationOrchestrator(
         text: String,
         images: List<ImageAttachment> = emptyList(),
         speak: Boolean = false,
+        /**
+         * Der im Editor markierte Abschnitt, falls die Frage sich darauf bezieht.
+         *
+         * Fertig aufbereitet hereingereicht statt als Datei und Zeilenbereich: Das Zuschneiden
+         * ist reine Textarbeit, sie liegt in `SourceSelection` und ist dort ohne Android
+         * geprüft. Diese Klasse soll nicht wissen, wie ein Ausschnitt aussieht.
+         */
+        selection: String? = null,
     ): TurnReport? {
         if (text.isBlank()) return null
-        return handle(text, images = images, speak = speak)
+        return handle(text, images = images, speak = speak, selection = selection)
     }
 
     /**
@@ -335,9 +353,11 @@ class ConversationOrchestrator(
         images: List<ImageAttachment>,
         speak: Boolean,
         hasImage: Boolean = images.isNotEmpty(),
+        selection: String? = null,
     ): TurnReport = turnLock.withLock {
         val startedAt = clock()
         speakThisTurn = speak
+        selectionThisTurn = selection
         turnHistory = historyMessages()
 
         append(ChatEntry(fromUser = true, text = text, timestampMillis = startedAt))
@@ -531,6 +551,7 @@ class ConversationOrchestrator(
                                 memoryContext = memoryContext,
                                 spoken = speakThisTurn,
                                 attachmentContext = attachmentContext.map { it.asPromptBlock() },
+                                selection = selectionThisTurn,
                             ),
                         )
                     )
@@ -671,6 +692,10 @@ class ConversationOrchestrator(
                                 memoryContext = memoryContext,
                                 toolDescription = registry.promptDescription(),
                                 spoken = speakThisTurn,
+                                // Auch hier: "ändere die markierte Stelle" ist ein
+                                // Werkzeugaufruf, und ohne den Ausschnitt wüsste das Modell
+                                // nicht, welche Stelle gemeint ist.
+                                selection = selectionThisTurn,
                             ),
                         )
                     )

@@ -21,6 +21,13 @@ object NeonPrompts {
         toolDescription: String? = null,
         spoken: Boolean = true,
         attachmentContext: List<String> = emptyList(),
+        /**
+         * Der im Editor markierte Abschnitt, fertig aufbereitet.
+         *
+         * Siehe `SourceSelection.alsPromptBlock`: Datei, Zeilennummern, das Markierte mit `>`
+         * gekennzeichnet und fünf Zeilen Umgebung.
+         */
+        selection: String? = null,
     ): String = buildString {
         appendLine("Du bist Neon, ein Sprachassistent auf einem Android-Telefon.")
         appendLine()
@@ -64,6 +71,29 @@ object NeonPrompts {
             appendLine("- Nenne die Datei, aus der du es hast.")
             appendLine("- Steht die Antwort nicht darin, sage das. Erfinde nichts dazu.")
             appendLine("- Es sind Ausschnitte. Es kann sein, dass du nicht alles siehst.")
+        }
+
+        // Der markierte Abschnitt steht **nach** den Anhängen und **vor** den Werkzeugen.
+        //
+        // Die Reihenfolge ist nicht beliebig: Wer im Editor etwas markiert und fragt, meint
+        // diese Stelle und nicht irgendeine Fundstelle aus einem Anhang. Was näher am Ende
+        // des Prompts steht, gewichtet ein kleines Modell höher — und die Anweisung „das ist
+        // gemeint" muss die allgemeineren Anweisungen davor überstimmen können.
+        if (!selection.isNullOrBlank()) {
+            appendLine()
+            appendLine("Der Nutzer hat im Editor eine Stelle markiert und fragt dazu:")
+            appendLine()
+            appendLine(selection)
+            appendLine()
+            appendLine("Dazu gilt:")
+            appendLine("- Die Frage bezieht sich auf die markierten Zeilen. Sie sind mit > gekennzeichnet.")
+            appendLine("- Die Zeilen ohne > stehen nur zur Orientierung da.")
+            // Ohne diesen Punkt beschreibt ein kleines Modell den Umgebungscode gleich mit
+            // und die Antwort wird dreimal so lang wie die Frage.
+            appendLine("- Antworte auf die Frage. Erkläre nicht die ganze Datei.")
+            // Und ohne diesen erfindet es Code, den es nie gesehen hat, weil es nur einen
+            // Ausschnitt hat und das nicht merkt.
+            appendLine("- Was du hier nicht siehst, kennst du nicht. Sage es, statt zu raten.")
         }
 
         if (!toolDescription.isNullOrBlank()) {
