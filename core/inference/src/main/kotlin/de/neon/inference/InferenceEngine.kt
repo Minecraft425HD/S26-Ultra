@@ -60,7 +60,20 @@ data class GenerationRequest(
 sealed interface GenerationChunk {
     data class Token(val text: String) : GenerationChunk
     data class Done(val tokenCount: Int, val tokensPerSecond: Double) : GenerationChunk
-    data class Failed(val reason: String) : GenerationChunk
+
+    /**
+     * Die Antwort kam nicht zustande.
+     *
+     * @param reason der Fall in einem Satz. Das steht in der Sprechblase und wird gesprochen.
+     * @param detail die Rohmeldung und die Zahlen dahinter — fürs Protokoll, nicht für die
+     *   Sprechblase.
+     *
+     *   Zwei Felder statt einem, weil dieselbe Auskunft zwei Adressaten hat.
+     *   `unexpected end of stream on http://127.0.0.1:18080/` ist genau die Meldung, mit
+     *   der dieser Fehler gemeldet wurde: Sie sagt einem Menschen nichts, taugt aber als
+     *   einzige Spur. Sie vorzulesen hilft niemandem, sie wegzuwerfen auch nicht.
+     */
+    data class Failed(val reason: String, val detail: String? = null) : GenerationChunk
 }
 
 /**

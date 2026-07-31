@@ -2,6 +2,7 @@ package de.neon.inference
 
 import android.content.Context
 import de.neon.platform.DeviceMemory
+import de.neon.platform.MemoryReading
 import de.neon.router.Capability
 import de.neon.platform.NeonLog
 import java.io.File
@@ -37,6 +38,23 @@ interface ServerSupervisor {
     suspend fun shutdown()
 
     /**
+     * Wie es dem Server in diesem Augenblick geht.
+     *
+     * **Wozu.** Bricht eine Antwort mitten im Strom ab, meldet OkHttp
+     * `unexpected end of stream on http://127.0.0.1:18080/`. Diese Meldung sagt, *dass* die
+     * Gegenseite weg ist, und nichts darüber, *warum*. Dabei entscheidet genau das über die
+     * nächste Runde:
+     *
+     *  - **Prozess tot** → Speichermangel oder Absturz. Dann hilft ein kleineres Modell oder
+     *    ein kleineres Kontextfenster.
+     *  - **Prozess lebt** → die Verbindung brach ab, obwohl gerechnet wird. Ein anderer
+     *    Fehler, der eine andere Antwort braucht.
+     *
+     * Gefragt wird erst beim Scheitern, nicht laufend — der Aufruf liest `/proc/meminfo`.
+     */
+    fun zustand(): ServerZustand = ServerZustand(lebt = null)
+
+    /**
      * Wird während des Ladens regelmäßig gerufen.
      *
      * Der Grund ist ein Fehler, der hier gemacht wurde: Die Startfrist wurde von 60 auf 329
@@ -48,6 +66,45 @@ interface ServerSupervisor {
     var onLoadingProgress: ((LoadingProgress) -> Unit)?
         get() = null
         set(_) = Unit
+}
+
+/**
+ * Der Zustand des Servers, wie er sich von außen feststellen lässt.
+ *
+ * Die Felder sind genau die, die einen Abbruch eingrenzen. Bei einem Abschuss durch das
+ * System sind sie die einzige Spur, die es je geben wird: `llama-server` bekommt SIGKILL und
+ * kann selbst nichts mehr sagen.
+ */
+data class ServerZustand(
+    /**
+     * Ob der Serverprozess noch läuft.
+     *
+     * `null` heißt **nicht wissen**, nicht „lebt" oder „tot". Ein Supervisor, der auf einen
+     * von Hand gestarteten Server zeigt, besitzt den Prozess nicht und kann über ihn nichts
+     * aussagen. `false` zu melden wäre eine Behauptung, `true` eine Vermutung — und aus einer
+     * Vermutung wird im Protokoll binnen eines Tages eine Tatsache.
+     */
+    val lebt: Boolean?,
+    /** Die Kontextgröße, mit der der Server läuft; `0` wenn unbekannt. */
+    val kontextGroesse: Int = 0,
+    /** Die letzte aussagekräftige Ausgabezeile des Servers, falls es eine gab. */
+    val letzteZeile: String? = null,
+    /** Der freie Speicher **in diesem Moment** — nicht der beim Laden. */
+    val speicher: MemoryReading = MemoryReading(0, 0),
+) {
+    /** Alles in einer Zeile, wie es in die Protokolldatei gehört. */
+    fun describe(): String = buildList {
+        add(
+            when (lebt) {
+                false -> "Serverprozess tot"
+                true -> "Serverprozess lebt"
+                null -> "Serverprozess unbekannt"
+            }
+        )
+        if (kontextGroesse > 0) add("Kontext $kontextGroesse")
+        add(speicher.describe())
+        letzteZeile?.let { add("letzte Serverzeile: $it") }
+    }.joinToString(" · ")
 }
 
 /** Wie weit das Laden ist. */
@@ -149,6 +206,21 @@ class ProcessServerSupervisor(
     val isRunning: Boolean get() = process?.isAlive == true
 
     val currentModelId: String? get() = servingModelId
+
+    /**
+     * Hier ist [ServerZustand.lebt] eine echte Auskunft: Dieser Supervisor hat den Prozess
+     * selbst gestartet und hält ihn in der Hand.
+     *
+     * Der Speicher wird **jetzt** gelesen und nicht der Wert vom Laden benutzt. Der
+     * Unterschied ist der ganze Zweck: Beim Laden waren 1,7 GB frei, und die Frage ist, was
+     * davon übrig war, als es krachte.
+     */
+    override fun zustand(): ServerZustand = ServerZustand(
+        lebt = isRunning,
+        kontextGroesse = laufenderKontext,
+        letzteZeile = lastMeaningfulLine,
+        speicher = DeviceMemory.read(),
+    )
 
     override suspend fun clientFor(
         model: de.neon.router.ModelSpec,

@@ -90,9 +90,16 @@ class LlamaServerEngine(
                 .onFailure { error ->
                     // Ein vom Nutzer abgebrochener Strom ist kein Fehler, den er hören muss.
                     if (!cancelled.get()) {
+                        // Erst jetzt nachsehen, wie es dem Server geht. Vorher wäre die
+                        // Auskunft veraltet, und laufend zu fragen kostet einen
+                        // /proc/meminfo-Zugriff je Antwort ohne Gegenwert.
+                        val zustand = supervisor.zustand()
+                        val roh = error.message?.takeIf { it.isNotBlank() }
+                            ?: error.javaClass.simpleName
                         trySend(
                             GenerationChunk.Failed(
-                                error.message ?: "Die Verbindung zum Modell ist abgerissen."
+                                reason = deuteAbbruch(roh, zustand.lebt),
+                                detail = "$roh · ${zustand.describe()}",
                             )
                         )
                     }
@@ -107,8 +114,39 @@ class LlamaServerEngine(
         }
     }.flowOn(dispatcher)
 
-    private companion object {
-        const val CANCEL_TIMEOUT_MILLIS = 2_000L
+    companion object {
+        private const val CANCEL_TIMEOUT_MILLIS = 2_000L
+
+        /**
+         * Was der Abbruch bedeutet, in einem Satz.
+         *
+         * **Der Anlass.** Gemeldet wurde `unexpected end of stream on
+         * http://127.0.0.1:18080/`, und Neon gab das wörtlich weiter. Die Meldung sagt, dass
+         * die Gegenseite mitten im Strom weg war — Port 18080 gehört `llama-server`, niemand
+         * sonst kann diese Verbindung abbrechen. Über die Ursache sagt sie nichts, und genau
+         * die entscheidet, was als nächstes zu tun ist.
+         *
+         * Eine reine Funktion, damit jeder der Fälle ohne Server festzuhalten ist.
+         *
+         * @param roh die Meldung der Ausnahme.
+         * @param lebt ob der Serverprozess noch läuft; `null` wenn unbekannt.
+         */
+        fun deuteAbbruch(roh: String, lebt: Boolean?): String = when {
+            // Wer mit einem Statuscode antwortet, lebt. Hier über einen weggefallenen
+            // Prozess zu reden wäre falsch, und die Meldung des Servers steht schon in
+            // verständlichem Deutsch da.
+            roh.startsWith(LlamaServerClient.ABLEHNUNG_PRAEFIX) -> roh
+
+            lebt == false ->
+                "Der Server wurde mitten in der Antwort beendet. Das passiert auf diesem " +
+                    "Gerät vor allem bei Speichermangel — ein kleineres Modell oder ein " +
+                    "kleineres Kontextfenster hilft."
+
+            lebt == true ->
+                "Die Verbindung zum Server brach ab, obwohl er noch läuft."
+
+            else -> "Die Verbindung zum Server brach ab."
+        }
     }
 }
 

@@ -207,6 +207,17 @@ Deshalb zwei Wege:
   wird als allererste Anweisung installiert, noch vor allem anderen.
 - **Fehler im Betrieb.** *Diagnose → Protokoll* zeigt die letzten Zeilen, ebenfalls mit
   **Teilen**. Die Ausgabe von `llama-server` steht vollständig darin.
+- **Abgebrochene Antwort.** Bricht der Strom mitten in der Antwort ab, meldet OkHttp
+  `unexpected end of stream on http://127.0.0.1:18080/` — die Meldung sagt, *dass* die
+  Gegenseite weg war, und nichts darüber, warum. Neon sieht deshalb nach, ob der
+  Serverprozess in diesem Augenblick noch lebt, und unterscheidet zwei Fälle: **tot** heißt
+  Speichermangel oder Absturz, und dann hilft ein kleineres Modell oder ein kleineres
+  Kontextfenster; **lebt** heißt, die Verbindung hakte, während gerechnet wurde. Ins Protokoll
+  geht beides mit Zahlen: Modell, Token bis dahin, Kontextgröße, freier Speicher **in diesem
+  Moment** und die letzte Serverzeile. Bei einem Abschuss durch das System ist das die einzige
+  Spur, die es je geben wird — `llama-server` bekommt SIGKILL und kann selbst nichts mehr
+  sagen. Automatisch wiederholt wird nichts: Bei Speichermangel wäre das dasselbe Modell, derselbe
+  Kontext, dasselbe Ende, nur doppelt so spät sichtbar.
 
 Der Aufbau der Anwendung ist gekapselt: Scheitert ein Bestandteil, startet Neon trotzdem und
 zeigt den Grund, statt zu sterben. Sprachausgabe, Spracherkennung und Datenbank entstehen

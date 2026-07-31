@@ -69,6 +69,8 @@ class ConversationOrchestratorTest {
     private class FakeEngine(
         private val tokens: List<String> = emptyList(),
         private val failure: String? = null,
+        /** Die Rohmeldung samt Zahlen, wie sie die echte Engine mitschickt. */
+        private val failureDetail: String? = null,
     ) : InferenceEngine {
         override var loadedModelId: String? = null
             private set
@@ -87,7 +89,7 @@ class ConversationOrchestratorTest {
         override fun generate(request: GenerationRequest): Flow<GenerationChunk> = flow {
             lastRequest = request
             if (failure != null) {
-                emit(GenerationChunk.Failed(failure))
+                emit(GenerationChunk.Failed(failure, failureDetail))
                 return@flow
             }
             tokens.forEach { emit(GenerationChunk.Token(it)) }
@@ -110,6 +112,7 @@ class ConversationOrchestratorTest {
         memory: MemoryRecall? = null,
         learner: TurnLearner? = null,
         onEntry: ((ChatEntry) -> Unit)? = null,
+        log: (String) -> Unit = {},
     ): Pair<ConversationOrchestrator, InMemoryRouteOutcomeStore> {
         val resolver = ModelFileResolver { if (modelsAvailable) File("/dev/null") else null }
         val lifecycle = ModelLifecycleManager(
@@ -140,6 +143,7 @@ class ConversationOrchestratorTest {
             memory = memory,
             learner = learner,
             onEntry = onEntry,
+            log = log,
         ) to outcomeStore
     }
 
@@ -292,6 +296,71 @@ class ConversationOrchestratorTest {
 
         assertNotNull(report)
         assertTrue(report.answer.contains("native Bibliothek fehlt"))
+    }
+
+    /**
+     * Ein Abbruch hinterlässt eine Spur.
+     *
+     * **Der Anlass.** Gemeldet wurde `unexpected end of stream on http://127.0.0.1:18080/`.
+     * Die Meldung stand in der Sprechblase — und in der Protokolldatei stand dazu keine
+     * einzige Zeile. Hier wurde zweimal derselbe Einzeiler aufgerufen, der nur sprach und
+     * nichts aufschrieb.
+     *
+     * Was hineingehört, ist das, was die Ursache eingrenzt: welches Modell, wie viele Token
+     * bis dahin angekommen waren, und die Rohmeldung samt Serverzustand. Null Token heißt, es
+     * ging schon beim Prompt schief; vierzig heißen, es lief und brach dann ab.
+     */
+    @Test
+    fun `ein Abbruch erzeugt eine Protokollzeile mit Zahlen`() = runTest {
+        val zeilen = mutableListOf<String>()
+        val (orchestrator, _) = orchestrator(
+            asr = FakeAsr(Transcript("wie hoch ist der eiffelturm", 0.9f, "de-DE")),
+            tts = FakeTts(),
+            engine = FakeEngine(
+                failure = "Der Server wurde mitten in der Antwort beendet.",
+                failureDetail = "unexpected end of stream on http://127.0.0.1:18080/ · " +
+                    "Serverprozess tot · Kontext 8192 · RAM: 0,8 von 5,3 GB frei",
+            ),
+            log = { zeilen += it },
+        )
+
+        val report = orchestrator.handleUtterance(samples)
+
+        assertNotNull(report)
+        val zeile = zeilen.singleOrNull { it.contains("abgebrochen") }
+        assertNotNull(zeile, "kein Abbruch protokolliert, nur: $zeilen")
+
+        // Das Modell, damit sich die Zeile einem Versuch zuordnen lässt.
+        assertTrue(registry.models.any { zeile.contains(it.id) }, zeile)
+        assertTrue(zeile.contains("Token"), zeile)
+        // Die Rohmeldung darf nicht verschluckt werden: Sie ist bei einem Abschuss durch das
+        // System die einzige Spur, die es je geben wird.
+        assertTrue(zeile.contains("127.0.0.1:18080"), zeile)
+        assertTrue(zeile.contains("Serverprozess tot"), zeile)
+    }
+
+    /**
+     * Auch der Weg über ein Werkzeug protokolliert seinen Abbruch.
+     *
+     * Zwei Aufrufstellen, und die zweite wird beim Nachbessern gern vergessen — sie war es
+     * schon einmal.
+     */
+    @Test
+    fun `auch ein abgebrochener Werkzeugaufruf wird protokolliert`() = runTest {
+        val zeilen = mutableListOf<String>()
+        val (orchestrator, _) = orchestrator(
+            asr = FakeAsr(Transcript("schalte das wlan an", 0.9f, "de-DE")),
+            tts = FakeTts(),
+            engine = FakeEngine(failure = "Die Verbindung zum Server brach ab."),
+            routerLlm = fixedRoute(TaskCategory.GERAETE_AKTION),
+            tools = ToolRegistry(listOf(wlanTool)),
+            log = { zeilen += it },
+        )
+
+        val report = orchestrator.handleUtterance(samples)
+
+        assertNotNull(report)
+        assertTrue(zeilen.any { it.contains("abgebrochen") }, "nur: $zeilen")
     }
 
     @Test

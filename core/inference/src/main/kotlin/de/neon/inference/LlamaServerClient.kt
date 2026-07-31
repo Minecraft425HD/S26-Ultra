@@ -153,7 +153,7 @@ class LlamaServerClient(
         return runCatching {
             http.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    throw IOException("Server antwortete mit ${response.code}: ${errorText(response)}")
+                    throw IOException("$ABLEHNUNG_PRAEFIX ${response.code}: ${errorText(response)}")
                 }
                 readEventStream(response, onToken)
             }
@@ -247,6 +247,16 @@ class LlamaServerClient(
     }
 
     companion object {
+        /**
+         * Womit eine Ablehnung durch den Server beginnt.
+         *
+         * Als Konstante, weil [LlamaServerEngine] daran den Unterschied festmacht: Wer mit
+         * einem Statuscode antwortet, **lebt** — dann wäre jede Aussage über einen
+         * weggefallenen Prozess falsch. Zwei Zeichenketten in zwei Dateien wären
+         * auseinandergelaufen, ohne dass es auffällt.
+         */
+        const val ABLEHNUNG_PRAEFIX = "Server antwortete mit"
+
         private const val DATA_PREFIX = "data:"
         private const val DONE_MARKER = "[DONE]"
         private val JSON_MEDIA = "application/json".toMediaType()

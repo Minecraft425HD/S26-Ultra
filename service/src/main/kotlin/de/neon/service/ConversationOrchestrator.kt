@@ -497,6 +497,7 @@ class ConversationOrchestrator(
         // Wie viel der gefilterten Antwort schon ans Sprechen weitergegeben wurde.
         var gesprochen = 0
         var failure: String? = null
+        var failureDetail: String? = null
 
         engine.generate(
             GenerationRequest(
@@ -555,12 +556,15 @@ class ConversationOrchestrator(
                 }
 
                 is GenerationChunk.Done -> Unit
-                is GenerationChunk.Failed -> failure = chunk.reason
+                is GenerationChunk.Failed -> {
+                    failure = chunk.reason
+                    failureDetail = chunk.detail
+                }
             }
         }
 
-        if (failure != null) {
-            return speakProblem(transcript, "Da ging etwas schief: $failure", selection.reason, startedAt)
+        failure?.let { grund ->
+            return abbruch(transcript, selection, tokens, grund, failureDetail, startedAt)
         }
 
         if (pending.isNotBlank()) say(pending.toString())
@@ -623,6 +627,7 @@ class ConversationOrchestrator(
         val raw = StringBuilder()
         var tokens = 0
         var failure: String? = null
+        var failureDetail: String? = null
 
         engine.generate(
             GenerationRequest(
@@ -654,12 +659,15 @@ class ConversationOrchestrator(
                 }
 
                 is GenerationChunk.Done -> Unit
-                is GenerationChunk.Failed -> failure = chunk.reason
+                is GenerationChunk.Failed -> {
+                    failure = chunk.reason
+                    failureDetail = chunk.detail
+                }
             }
         }
 
-        if (failure != null) {
-            return speakProblem(transcript, "Da ging etwas schief: $failure", selection.reason, startedAt)
+        failure?.let { grund ->
+            return abbruch(transcript, selection, tokens, grund, failureDetail, startedAt)
         }
 
         val call = ToolRegistry.parseCall(raw.toString())
@@ -688,6 +696,44 @@ class ConversationOrchestrator(
             latencyMs = latency,
             usedNoModel = false,
             tokenCount = tokens,
+        )
+    }
+
+    /**
+     * Eine Antwort ist mitten im Strom abgebrochen.
+     *
+     * **Warum das eine eigene Stelle ist.** Hier stand zweimal derselbe Einzeiler:
+     * `speakProblem(transcript, "Da ging etwas schief: $failure", …)`. Damit landete die
+     * Rohmeldung von OkHttp in der Sprechblase und **nirgends im Protokoll** — gemeldet wurde
+     * `unexpected end of stream on http://127.0.0.1:18080/`, und in der Protokolldatei stand
+     * dazu keine Zeile. Ein Fehler, der sich nicht wiederfinden lässt, ist einer, über den
+     * man nur raten kann.
+     *
+     * Die Zahl der bis dahin angekommenen Token gehört dazu: Null Token heißt, es ging schon
+     * beim Rechnen des Prompts schief; vierzig heißen, es lief und brach dann ab. Das sind
+     * zwei verschiedene Fehler.
+     *
+     * Ausdrücklich **kein** neuer Versuch. Solange die Ursache nicht feststeht, bedeutet ein
+     * Wiederholen bei Speichermangel: dasselbe Modell, derselbe Kontext, dasselbe Ende — nur
+     * doppelt so spät sichtbar.
+     */
+    private suspend fun abbruch(
+        transcript: String,
+        selection: de.neon.router.ModelSelection,
+        tokens: Int,
+        failure: String,
+        detail: String?,
+        startedAt: Long,
+    ): TurnReport {
+        log(
+            "Antwort abgebrochen — ${selection.model.id}, $tokens Token bis dahin, " +
+                "${clock() - startedAt} ms: $failure" + detail?.let { " · $it" }.orEmpty()
+        )
+        return speakProblem(
+            transcript = transcript,
+            message = "Da ging etwas schief: $failure",
+            selection = selection.reason,
+            startedAt = startedAt,
         )
     }
 
