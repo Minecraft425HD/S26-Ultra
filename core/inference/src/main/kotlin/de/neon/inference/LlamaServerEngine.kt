@@ -96,10 +96,15 @@ class LlamaServerEngine(
                         val zustand = supervisor.zustand()
                         val roh = error.message?.takeIf { it.isNotBlank() }
                             ?: error.javaClass.simpleName
+                        val deutung = deuteAbbruch(roh, zustand.lebt)
                         trySend(
                             GenerationChunk.Failed(
-                                reason = deuteAbbruch(roh, zustand.lebt),
-                                detail = "$roh · ${zustand.describe()}",
+                                reason = deutung,
+                                // Die Rohmeldung nur dann anhängen, wenn sie nicht schon die
+                                // Deutung ist. Bei einer Serverablehnung stand sie sonst
+                                // zweimal in derselben Protokollzeile — 250 Zeichen doppelt.
+                                detail = if (deutung == roh) zustand.describe()
+                                else "$roh · ${zustand.describe()}",
                             )
                         )
                     }

@@ -67,6 +67,18 @@ class ToolRegistry(tools: List<Tool>) {
 
     init {
         require(byName.size == tools.size) { "Doppelte Werkzeugnamen in der Registry" }
+
+        // Zwei Namen können nach dem Bereinigen zusammenfallen — `tage_ab_heute` und
+        // `tage-ab-heute` ergeben dieselbe Regel. In der Grammatik stünde die Regel dann
+        // zweimal, llama.cpp nähme eine davon, und der Fehler wäre still: ein Werkzeug,
+        // das gelegentlich das falsche Argument bekommt. Lieber hier laut werden.
+        val regeln = specs.flatMap { spec ->
+            spec.parameters.map { regelname("arg-${spec.name}-${it.name}") to "${spec.name}.${it.name}" }
+        }
+        val gruppen = regeln.groupBy({ it.first }, { it.second }).filterValues { it.size > 1 }
+        require(gruppen.isEmpty()) {
+            "Parameternamen fallen in der Grammatik zusammen: $gruppen"
+        }
     }
 
     operator fun get(name: String): Tool? = byName[name]
@@ -120,9 +132,12 @@ class ToolRegistry(tools: List<Tool>) {
         if (specs.isEmpty()) return ""
 
         return buildString {
-            appendLine("root ::= " + specs.joinToString(" | ") { "call-${it.name}" })
+            // Bereinigt auch hier: Ein Werkzeug namens `wecker_stellen` hätte denselben
+            // Fehler ausgelöst wie der Parameter `tage_ab_heute`. Im JSON steht weiterhin
+            // der echte Name — nur der Regelname ist ein anderer.
+            appendLine("root ::= " + specs.joinToString(" | ") { regelname("call-${it.name}") })
             for (spec in specs) {
-                append("call-").append(spec.name).append(" ::= ")
+                append(regelname("call-${spec.name}")).append(" ::= ")
                 append("\"{\\\"werkzeug\\\":\\\"").append(spec.name).append("\\\",\\\"argumente\\\":{\"")
                 spec.parameters.forEachIndexed { index, parameter ->
                     if (index > 0) append(" \",\" ")
@@ -151,10 +166,42 @@ class ToolRegistry(tools: List<Tool>) {
     }
 
     private fun argumentRule(toolName: String, parameter: ToolParameter): String =
-        "arg-$toolName-${parameter.name}"
+        regelname("arg-$toolName-${parameter.name}")
 
     companion object {
         private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+
+        /**
+         * Macht aus einem beliebigen Namen einen gültigen GBNF-Regelnamen.
+         *
+         * **Der Fehler, den das behebt.** Das Terminwerkzeug hat einen Parameter
+         * `tage_ab_heute`. Daraus wurde die Regel `arg-termin-tage_ab_heute`, und llama.cpp
+         * antwortete:
+         *
+         * ```
+         * parse: error parsing grammar: expecting newline or end at _ab_heute "}}"
+         * ```
+         *
+         * In GBNF-Regelnamen sind nur Buchstaben, Ziffern und Bindestriche erlaubt. Der
+         * Unterstrich beendet den Namen; alles danach steht für den Parser mitten im
+         * Nichts. Damit war nicht diese eine Regel kaputt, sondern **die ganze Grammatik**
+         * — und jeder Werkzeugaufruf endete mit HTTP 400, gleich um welches Werkzeug es
+         * ging. Auf dem Gerät sah das aus wie „Neon kann keine Termine".
+         *
+         * Betroffen ist nur der Regelname. Der JSON-Schlüssel im Aufruf bleibt
+         * `tage_ab_heute`, denn den erwartet [Tool.execute].
+         */
+        fun regelname(roh: String): String {
+            val bereinigt = roh.map { if (it in ERLAUBT) it else '-' }.joinToString("")
+            // Nicht bloß ersetzen, sondern zusammenfassen: Aus `a__b` würde sonst `a--b`,
+            // was gültig aber unnötig hässlich ist.
+            return bereinigt.replace(DOPPELTER_STRICH, "-").trim('-')
+        }
+
+        private val ERLAUBT: Set<Char> =
+            (('a'..'z') + ('A'..'Z') + ('0'..'9') + '-').toSet()
+
+        private val DOPPELTER_STRICH = Regex("-{2,}")
 
         /** Liest einen Werkzeugaufruf aus der Modellausgabe. */
         fun parseCall(raw: String): ToolCall? {

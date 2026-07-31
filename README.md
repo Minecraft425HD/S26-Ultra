@@ -159,6 +159,15 @@ auf `localhost` an. Das ist keine Notlösung, sondern löst vier Dinge auf einma
   benutzen ist verlässlicher, als eine Brücke hinterherzupflegen.
 - **GBNF-Grammatik ist dabei.** Sie erzwingt gültiges JSON bei der Einordnung in Stufe 2 und
   bei Werkzeugaufrufen. Auch ein kleines Modell kann damit nicht aus der Form fallen.
+
+  Regelnamen dürfen dabei nur Buchstaben, Ziffern und Bindestriche enthalten. Der Parameter
+  `tage_ab_heute` des Terminwerkzeugs ergab die Regel `arg-termin-tage_ab_heute`, und llama.cpp
+  antwortete mit `expecting newline or end at _ab_heute` — kaputt war damit nicht diese eine
+  Regel, sondern die **ganze** Grammatik, und jeder Werkzeugaufruf endete mit HTTP 400.
+  `ToolRegistry.regelname` bereinigt deshalb den Regelnamen; der JSON-Schlüssel bleibt
+  unverändert, denn den erwartet das Werkzeug. `GrammarNamesTest` prüft jeden Regelnamen der
+  echten Werkzeuge gegen genau diese Regel und lehnt Namen ab, die nach dem Bereinigen
+  zusammenfallen.
 - **Eigener Prozess.** Ein Modell, das den Speicher sprengt, reißt die Hörschleife nicht mit.
 - **Prüfbar ohne Telefon.** `LlamaServerIntegrationTest` startet einen echten Server mit
   einem kleinen Modell und prüft Streaming, Grammatik und Abbruch. Genau dieser Test hat zwei

@@ -564,7 +564,10 @@ class ConversationOrchestrator(
         }
 
         failure?.let { grund ->
-            return abbruch(transcript, selection, tokens, grund, failureDetail, startedAt)
+            return abbruch(
+                transcript, selection, tokens, grund, failureDetail, startedAt,
+                weg = "Antwort",
+            )
         }
 
         if (pending.isNotBlank()) say(pending.toString())
@@ -667,7 +670,10 @@ class ConversationOrchestrator(
         }
 
         failure?.let { grund ->
-            return abbruch(transcript, selection, tokens, grund, failureDetail, startedAt)
+            return abbruch(
+                transcript, selection, tokens, grund, failureDetail, startedAt,
+                weg = "Werkzeugaufruf",
+            )
         }
 
         val call = ToolRegistry.parseCall(raw.toString())
@@ -713,6 +719,12 @@ class ConversationOrchestrator(
      * beim Rechnen des Prompts schief; vierzig heißen, es lief und brach dann ab. Das sind
      * zwei verschiedene Fehler.
      *
+     * Und [weg] sagt, welcher der beiden Wege es war. Auf dem Gerät standen zwei Abbrüche
+     * fünfzig Sekunden auseinander, und die Zeilen ließen sich nicht unterscheiden: Der eine
+     * kam von einem Werkzeugaufruf mit erzwungener Grammatik, der andere von einer
+     * gewöhnlichen Antwort. Das ist derselbe Unterschied wie zwischen zwei Krankheiten mit
+     * demselben Fieber.
+     *
      * Ausdrücklich **kein** neuer Versuch. Solange die Ursache nicht feststeht, bedeutet ein
      * Wiederholen bei Speichermangel: dasselbe Modell, derselbe Kontext, dasselbe Ende — nur
      * doppelt so spät sichtbar.
@@ -724,9 +736,10 @@ class ConversationOrchestrator(
         failure: String,
         detail: String?,
         startedAt: Long,
+        weg: String,
     ): TurnReport {
         log(
-            "Antwort abgebrochen — ${selection.model.id}, $tokens Token bis dahin, " +
+            "Antwort abgebrochen — $weg, ${selection.model.id}, $tokens Token bis dahin, " +
                 "${clock() - startedAt} ms: $failure" + detail?.let { " · $it" }.orEmpty()
         )
         return speakProblem(
