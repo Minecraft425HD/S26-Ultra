@@ -24,6 +24,9 @@ android {
 dependencies {
     api(project(":core:router"))
     implementation(project(":core:platform"))
+    // Die Vorgänge im Projektverzeichnis liegen dort und sind ohne Android geprüft. Hier
+    // steht nur, wie sie heißen und was sie antworten.
+    api(project(":core:workspace"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)

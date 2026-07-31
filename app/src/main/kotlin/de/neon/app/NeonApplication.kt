@@ -70,6 +70,18 @@ class NeonApplication : Application() {
                     "llama-server ${if (built.inferenceAvailable) "vorhanden" else "FEHLT"}, " +
                         "Weckwort ${if (built.wakeWordAvailable) "vorhanden" else "fehlt"}",
                 )
+
+                // Die Python-Standardbibliothek auspacken — dreitausend Dateien, beim ersten
+                // Start ein paar Sekunden. Deshalb neben dem Startpfad und nicht in ihm: Eine
+                // App, die deswegen fünf Sekunden schwarz bleibt, sieht aus wie eine
+                // abgestürzte, und der Chat funktioniert derweil ohnehin.
+                //
+                // Der Baustand dient als Fassungskennung: Er ändert sich genau dann, wenn
+                // sich das mitgelieferte ZIP geändert haben kann.
+                Thread({ built.richtePythonEin(bauStand) }, "neon-python-setup").apply {
+                    isDaemon = true
+                    start()
+                }
             }
             .onFailure { error ->
                 startupFailure = error

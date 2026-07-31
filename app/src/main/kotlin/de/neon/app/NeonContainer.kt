@@ -45,6 +45,9 @@ import de.neon.service.TurnLearner
 import de.neon.speech.AndroidOnDeviceAsr
 import de.neon.speech.AndroidTts
 import de.neon.tools.CalendarEventTool
+import de.neon.tools.WorkspaceToolset
+import de.neon.workspace.PythonRuntime
+import de.neon.workspace.Workspace
 import de.neon.tools.ComposeMessageTool
 import de.neon.tools.DeviceActionExecutor
 import de.neon.tools.ToolRegistry
@@ -278,6 +281,72 @@ class NeonContainer(context: Context) {
         )
     )
 
+    /**
+     * Das Projektverzeichnis, in dem Neon arbeiten darf — und nur darin.
+     *
+     * Unter `filesDir` und nicht im gemeinsamen Speicher: Was hier liegt, gehört der App,
+     * verschwindet beim Deinstallieren und ist von anderen Apps nicht lesbar. Die Grenze
+     * selbst zieht [Workspace]; sie ist dort ohne Android geprüft, weil die Pfade aus einem
+     * Sprachmodell kommen und daneben das Gedächtnis, der Anhang-Index und die Modelldateien
+     * liegen.
+     */
+    val workspace = Workspace(File(appContext.filesDir, "projekt"))
+
+    /**
+     * Die Python-Umgebung.
+     *
+     * `null`, solange die Standardbibliothek nicht ausgepackt ist — und dann fehlt auch das
+     * Python-Werkzeug in der Grammatik. Ein Werkzeug anzubieten, das jedes Mal scheitert,
+     * wäre schlechter als keines: Ein Modell, dem ein Werkzeug angeboten wird, benutzt es.
+     */
+    @Volatile
+    var python: PythonRuntime? = null
+        private set
+
+    /**
+     * Packt die Standardbibliothek aus, falls nötig.
+     *
+     * Beim ersten Start dauert das ein paar Sekunden — dreitausend Dateien. Deshalb nicht im
+     * Konstruktor: Der Objektgraph wird beim Anwendungsstart gebaut, und eine App, die
+     * deswegen fünf Sekunden schwarz bleibt, sieht aus wie eine abgestürzte.
+     *
+     * Als Fassungskennung dient der Baustand. Er ändert sich genau dann, wenn sich das
+     * mitgelieferte ZIP geändert haben kann — eine eigene Nummer wäre eine zweite Wahrheit,
+     * die irgendwann nicht mehr stimmt.
+     */
+    fun richtePythonEin(bauStand: String) {
+        val laufzeit = PythonRuntime(
+            nativeDir = File(appContext.applicationInfo.nativeLibraryDir),
+            dataDir = appContext.filesDir,
+        )
+        runCatching {
+            val entpackt = laufzeit.einrichten(
+                zip = { appContext.assets.open(PythonRuntime.STDLIB_ASSET) },
+                fassung = bauStand,
+            )
+            if (entpackt) NeonLog.i(TAG, "Python-Standardbibliothek ausgepackt")
+        }.onFailure {
+            NeonLog.e(TAG, "Python-Umgebung ließ sich nicht einrichten", it)
+            return
+        }
+
+        if (!laufzeit.bereit) {
+            NeonLog.e(TAG, "Python-Starter fehlt unter ${laufzeit.launcher.absolutePath}")
+            return
+        }
+        python = laufzeit
+        NeonLog.i(TAG, "Python bereit, Standardbibliothek unter ${laufzeit.home}")
+    }
+
+    /**
+     * Die Werkzeuge fürs Programmieren.
+     *
+     * Getrennt von [tools], weil die erzwungene Grammatik **jedes** angebotene Werkzeug
+     * enthält: `datei-schreiben` neben `termin` zu stellen heißt, dass ein 4-B-Modell bei
+     * einer Wissensfrage gelegentlich eine Datei anlegt.
+     */
+    private val codeTools get() = ToolRegistry(WorkspaceToolset.alle(workspace, python))
+
     val orchestrator = ConversationOrchestrator(
         router = router,
         asr = asr,
@@ -288,6 +357,7 @@ class NeonContainer(context: Context) {
         actionExecutor = { actionExecutor.execute(it) },
         outcomeStore = outcomeStore,
         tools = tools,
+        codeTools = codeTools,
         memory = { query, limit ->
             runCatching { memory.recall(query, limit) }.getOrDefault(emptyList())
         },

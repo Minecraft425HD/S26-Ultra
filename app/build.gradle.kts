@@ -144,6 +144,7 @@ dependencies {
     implementation(project(":core:inference"))
     implementation(project(":core:memory"))
     implementation(project(":core:tools"))
+    implementation(project(":core:workspace"))
     implementation(project(":core:platform"))
 
     implementation(libs.androidx.core.ktx)

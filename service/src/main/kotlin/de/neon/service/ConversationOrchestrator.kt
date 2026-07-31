@@ -111,8 +111,21 @@ class ConversationOrchestrator(
     private val actionExecutor: (DeviceAction) -> String?,
     private val outcomeStore: RouteOutcomeStore,
     private val clock: () -> Long = System::currentTimeMillis,
-    /** Werkzeuge für Handlungen, die die Regelstufe nicht abdeckt. */
+    /** Werkzeuge für Handlungen, die die Regelstufe nicht abdeckt — Termin, Nachricht. */
     private val tools: ToolRegistry? = null,
+    /**
+     * Werkzeuge fürs Programmieren: Dateien lesen und ändern, Python ausführen.
+     *
+     * **Warum getrennt von [tools] und nicht alles in einem Topf.** Die Grammatik, die einen
+     * Werkzeugaufruf erzwingt, enthält **jedes** angebotene Werkzeug, und die ganze Liste
+     * steht im Prompt. Termin und Nachricht neben `datei-schreiben` und `python` zu stellen
+     * heißt: Ein 4-B-Modell wählt bei „was ist die Hauptstadt von Peru" gelegentlich
+     * `datei-schreiben`. Es liegt schließlich da.
+     *
+     * Welche Zusammenstellung dran ist, entscheidet die Kategorie: `GERAETE_AKTION` bekommt
+     * die eine, `CODE` die andere. Beides gleichzeitig gibt es nicht.
+     */
+    private val codeTools: ToolRegistry? = null,
     /** Was Neon sich über den Nutzer gemerkt hat. */
     private val memory: MemoryRecall? = null,
     /**
@@ -481,14 +494,23 @@ class ConversationOrchestrator(
         } ?: emptyList()
         _lastSources.value = attachmentContext.map { it.source }
 
-        // Werkzeuge kommen nur ins Spiel, wenn eine Handlung gefragt ist. Sie immer
-        // anzubieten würde den Prompt aufblähen und kleine Modelle dazu verleiten, auch
-        // Wissensfragen als Werkzeugaufruf zu beantworten.
-        val useTools = tools != null &&
-            selection.analysis.category == TaskCategory.GERAETE_AKTION
+        // Werkzeuge kommen nur ins Spiel, wenn sie zur Frage passen. Sie immer anzubieten
+        // würde den Prompt aufblähen und kleine Modelle dazu verleiten, auch Wissensfragen
+        // als Werkzeugaufruf zu beantworten.
+        //
+        // Und immer nur **eine** Zusammenstellung: Die erzwungene Grammatik enthält jedes
+        // angebotene Werkzeug, und ein 4-B-Modell, dem `datei-schreiben` neben `termin`
+        // angeboten wird, greift irgendwann daneben.
+        val passendeWerkzeuge = when (selection.analysis.category) {
+            TaskCategory.GERAETE_AKTION -> tools
+            TaskCategory.CODE -> codeTools
+            else -> null
+        }
 
-        if (useTools) {
-            return handleToolCall(selection, utterance, transcript, memoryContext, startedAt)
+        if (passendeWerkzeuge != null) {
+            return handleToolCall(
+                selection, utterance, transcript, memoryContext, startedAt, passendeWerkzeuge,
+            )
         }
 
         val answer = StringBuilder()
@@ -624,9 +646,16 @@ class ConversationOrchestrator(
         transcript: String,
         memoryContext: List<String>,
         startedAt: Long,
+        /**
+         * Die Zusammenstellung, die zu dieser Frage passt.
+         *
+         * Hereingereicht statt hier ausgewählt: Die Entscheidung fällt an der Kategorie, und
+         * die kennt nur der Aufrufer. Ein `tools ?: error(...)` stand hier vorher und hätte
+         * nach dem Hinzukommen der Programmierwerkzeuge stillschweigend die falsche
+         * Zusammenstellung genommen.
+         */
+        registry: ToolRegistry,
     ): TurnReport {
-        val registry = tools ?: error("handleToolCall ohne Werkzeuge aufgerufen")
-
         val raw = StringBuilder()
         var tokens = 0
         var failure: String? = null
