@@ -94,4 +94,69 @@ class SourceSelectionTest {
         assertTrue(block.contains("   4  zeile 4"), block)
         assertTrue(block.contains("> 10  zeile 10"), block)
     }
+
+    /**
+     * Aus Zeichenpositionen werden Zeilennummern.
+     *
+     * Compose kennt nur Abstände vom Dateianfang; der Prompt braucht Zeilen, denn nur die kann
+     * eine Antwort nennen und ein Mensch wiederfinden.
+     */
+    @Test
+    fun `eine Markierung ueber zwei Zeilen ergibt zwei Zeilen`() {
+        val text = "eins\nzwei\ndrei\nvier"
+        //          0123 4 5678 9 ...
+
+        // Von Anfang "zwei" bis Ende "drei".
+        val auswahl = SourceSelection.ausZeichenbereich("a.kt", text, start = 5, ende = 14)
+
+        assertEquals(2..3, auswahl.bereich)
+        assertEquals("zwei\ndrei", auswahl.markiert)
+    }
+
+    @Test
+    fun `eine Markierung bis zum naechsten Zeilenanfang nimmt die Zeile nicht mit`() {
+        val text = "eins\nzwei\ndrei"
+
+        // Wer mit dem Finger über "eins" streicht, markiert meistens bis zum Anfang von
+        // "zwei" — und bekäme sonst eine Zeile mehr, als er sieht.
+        val auswahl = SourceSelection.ausZeichenbereich("a.kt", text, start = 0, ende = 5)
+
+        assertEquals(1..1, auswahl.bereich)
+        assertEquals("eins", auswahl.markiert)
+    }
+
+    @Test
+    fun `ohne Markierung gilt die Zeile, in der der Cursor steht`() {
+        val text = "eins\nzwei\ndrei"
+
+        // Der häufigste Fall beim Antippen: Es ist nichts markiert, nur der Cursor steht
+        // irgendwo. „Was macht das hier" meint dann diese Zeile.
+        val auswahl = SourceSelection.ausZeichenbereich("a.kt", text, start = 7, ende = 7)
+
+        assertEquals(2..2, auswahl.bereich)
+    }
+
+    @Test
+    fun `Positionen ausserhalb des Textes stuerzen nicht ab`() {
+        val text = "eins\nzwei"
+
+        // Sie kommen aus einer Oberfläche, in der gerade getippt wurde: Ein Zustand, in dem
+        // Text und Markierung um einen Tastendruck auseinanderliegen, ist normal.
+        assertEquals(1..2, SourceSelection.ausZeichenbereich("a.kt", text, -5, 999).bereich)
+        assertEquals(1..1, SourceSelection.ausZeichenbereich("a.kt", "", 3, 7).bereich)
+    }
+
+    @Test
+    fun `eine rueckwaerts gezogene Markierung meint denselben Bereich`() {
+        // Rückwärts markieren ist üblich, und manche Oberflächen reichen dann start > ende
+        // durch. Nur zu begrenzen ließe die Markierung auf einen Punkt am falschen Ende
+        // zusammenfallen — die Frage bezöge sich auf eine Zeile, die niemand markiert hat.
+        val text = "eins\nzwei\ndrei"
+
+        val rueckwaerts = SourceSelection.ausZeichenbereich("a.kt", text, start = 9, ende = 2)
+        val vorwaerts = SourceSelection.ausZeichenbereich("a.kt", text, start = 2, ende = 9)
+
+        assertEquals(vorwaerts.bereich, rueckwaerts.bereich)
+        assertEquals(1..2, rueckwaerts.bereich)
+    }
 }

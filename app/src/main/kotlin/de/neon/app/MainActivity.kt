@@ -238,8 +238,29 @@ class MainActivity : ComponentActivity() {
                         else -> {
                             val state = ready.orchestrator.state.collectAsState().value
                             var zeigeDiagnose by remember { mutableStateOf(false) }
+                            var zeigeEditor by remember { mutableStateOf(false) }
 
-                            if (!zeigeDiagnose) {
+                            if (zeigeEditor) {
+                                // Die Dateiliste bei jedem Aufbau neu lesen: Neon legt
+                                // Dateien während des Gesprächs an, und eine Liste, die das
+                                // erst nach einem Neustart zeigt, wäre irreführend.
+                                EditorScreen(
+                                    dateien = ready.workspace.dateien(),
+                                    lies = { pfad -> ready.workspace.lies(pfad) },
+                                    speichere = { pfad, inhalt ->
+                                        ready.workspace.schreib(pfad, inhalt)
+                                    },
+                                    frage = { frage, auswahl ->
+                                        // Zurück in den Chat: Dort steht die Antwort, dort
+                                        // steht der Verlauf, und dort sieht man, dass etwas
+                                        // passiert. Eine Antwort im Editor wäre eine zweite
+                                        // Stelle, an der man nachsehen muss.
+                                        zeigeEditor = false
+                                        sendText(ready, frage, auswahl)
+                                    },
+                                    onZurueck = { zeigeEditor = false },
+                                )
+                            } else if (!zeigeDiagnose) {
                                 ChatScreen(
                                     entries = ready.orchestrator.transcript.collectAsState().value,
                                     state = state,
@@ -257,6 +278,7 @@ class MainActivity : ComponentActivity() {
                                     onSend = { text -> sendText(ready, text) },
                                     onSpeak = { withPermissions { NeonForegroundService.trigger(this) } },
                                     onShowDiagnostics = { zeigeDiagnose = true },
+                                    onShowEditor = { zeigeEditor = true },
                                     onClear = { ready.clearChat() },
                                 )
                             } else {
@@ -283,13 +305,14 @@ class MainActivity : ComponentActivity() {
      * die Oberfläche liest den Zustand ohnehin über `StateFlow` und findet die fertige
      * Antwort vor, wenn sie zurückkommt.
      */
-    private fun sendText(container: NeonContainer, text: String) {
+    private fun sendText(container: NeonContainer, text: String, selection: String? = null) {
         container.scope.launch {
             runCatching {
                 container.orchestrator.handleText(
                     text = text,
                     images = container.takePendingImages(),
                     speak = speakTypedAnswers,
+                    selection = selection,
                 )
             }
                 .onFailure { NeonLog.e("MainActivity", "Getippte Frage fehlgeschlagen", it) }

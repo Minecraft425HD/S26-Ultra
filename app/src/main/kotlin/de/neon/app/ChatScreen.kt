@@ -70,6 +70,8 @@ fun ChatScreen(
     onSend: (String) -> Unit,
     onSpeak: () -> Unit,
     onShowDiagnostics: () -> Unit,
+    /** Führt zum Editor: Projektdateien ansehen, ändern, zu markierten Stellen fragen. */
+    onShowEditor: () -> Unit,
     onClear: () -> Unit,
 ) {
     var draft by remember { mutableStateOf("") }
@@ -100,6 +102,7 @@ fun ChatScreen(
             state = state,
             hasEntries = entries.isNotEmpty(),
             onShowDiagnostics = onShowDiagnostics,
+            onShowEditor = onShowEditor,
             onClear = onClear,
         )
         HorizontalDivider()
@@ -179,6 +182,7 @@ private fun Kopfzeile(
     state: NeonState,
     hasEntries: Boolean,
     onShowDiagnostics: () -> Unit,
+    onShowEditor: () -> Unit,
     onClear: () -> Unit,
 ) {
     Row(
@@ -194,6 +198,7 @@ private fun Kopfzeile(
         if (hasEntries) {
             TextButton(onClick = onClear) { Text("Leeren") }
         }
+        TextButton(onClick = onShowEditor) { Text("Projekt") }
         TextButton(onClick = onShowDiagnostics) { Text("Diagnose") }
     }
 }
