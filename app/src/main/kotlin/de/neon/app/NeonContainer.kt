@@ -159,7 +159,10 @@ class NeonContainer(context: Context) {
      * ist, wäre das ein zweiter Speicherblock für eine Einordnung, die auch so wenige
      * hundert Millisekunden dauert.
      */
-    private val routerLlm = LocalRouterLlm(answerEngine)
+    private val routerLlm = LocalRouterLlm(
+        engine = answerEngine,
+        log = { meldung -> NeonLog.i("NeonRouter", meldung) },
+    )
 
     val router = Router(
         registry = registry,

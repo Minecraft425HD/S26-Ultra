@@ -103,8 +103,11 @@ class LlamaServerEngine(
                                 // Die Rohmeldung nur dann anhängen, wenn sie nicht schon die
                                 // Deutung ist. Bei einer Serverablehnung stand sie sonst
                                 // zweimal in derselben Protokollzeile — 250 Zeichen doppelt.
-                                detail = if (deutung == roh) zustand.describe()
-                                else "$roh · ${zustand.describe()}",
+                                detail = listOfNotNull(
+                                    roh.takeIf { it != deutung },
+                                    zustand.describe(),
+                                    pause(client.pauseVorAnfrageMillis),
+                                ).joinToString(" · "),
                             )
                         )
                     }
@@ -121,6 +124,16 @@ class LlamaServerEngine(
 
     companion object {
         private const val CANCEL_TIMEOUT_MILLIS = 2_000L
+
+        /**
+         * Die Pause vor der Anfrage, wenn es eine gab.
+         *
+         * `null` bei der ersten Anfrage auf einer Verbindung — dort gibt es keine Pause, und
+         * eine „0 s" wäre eine erfundene Messung. Genau diese Unterscheidung entscheidet
+         * über die Keep-Alive-Erklärung: Der erste Aufruf gelang auf dem Gerät jedes Mal.
+         */
+        fun pause(millis: Long): String? =
+            if (millis < 0) null else "Pause vor der Anfrage: ${millis / 1000.0} s"
 
         /**
          * Was der Abbruch bedeutet, in einem Satz.

@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import okhttp3.ConnectionPool
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -64,6 +65,29 @@ class LlamaServerClient(
      */
     @Volatile
     var lastHealthFailure: String? = null
+        private set
+
+    /**
+     * Wann die letzte Antwort fertig war, in Millisekunden nach `nanoTime`-Zählung.
+     *
+     * `0`, solange noch keine gelaufen ist. Grundlage von [pauseVorAnfrageMillis].
+     */
+    @Volatile
+    private var letzteAntwortEndeteBei: Long = 0
+
+    /**
+     * Wie lange vor der zuletzt begonnenen Anfrage nichts passiert ist — `-1` beim ersten Mal.
+     *
+     * **Wozu diese Zahl.** Die Erklärung für `unexpected end of stream` lautet: Der Server
+     * schließt eine untätige Verbindung nach fünf Sekunden, und Neon griff danach noch nach
+     * ihr. Auf dem Gerät kamen beide Abbrüche nach mehr als dreißig Sekunden Pause, die
+     * Erfolge nach siebzehn oder auf einer frischen Verbindung.
+     *
+     * Das ist ein Muster und noch kein Beweis. Steht die Pause im Protokoll, entscheidet das
+     * nächste Vorkommen die Frage — statt dass ich sie weiter für entschieden halte.
+     */
+    @Volatile
+    var pauseVorAnfrageMillis: Long = -1
         private set
 
     /** Antwortet der Server überhaupt? */
@@ -150,6 +174,12 @@ class LlamaServerClient(
             .post(payload.toString().toRequestBody(JSON_MEDIA))
             .build()
 
+        // Vor dem Absenden festhalten, wie lange die Verbindung untätig war. Danach wäre die
+        // Zahl von der Rechenzeit des Modells verfälscht.
+        pauseVorAnfrageMillis =
+            if (letzteAntwortEndeteBei == 0L) -1
+            else (System.nanoTime() - letzteAntwortEndeteBei) / 1_000_000
+
         return runCatching {
             http.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
@@ -157,6 +187,10 @@ class LlamaServerClient(
                 }
                 readEventStream(response, onToken)
             }
+        }.also {
+            // Auch nach einem Fehlschlag: Die Uhr misst die Untätigkeit der Verbindung, und
+            // die beginnt so oder so jetzt.
+            letzteAntwortEndeteBei = System.nanoTime()
         }
     }
 
@@ -264,6 +298,31 @@ class LlamaServerClient(
         private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
         /**
+         * Wie lange Neon eine ungenutzte Verbindung behält.
+         *
+         * **Der Fehler, den das behebt.** `llama-server` benutzt cpp-httplib, und die schließt
+         * eine untätige Keep-Alive-Verbindung nach `CPPHTTPLIB_KEEPALIVE_TIMEOUT_SECOND`
+         * Sekunden — **fünf**. llama.cpp ruft `set_keep_alive_timeout` nirgends auf, es bleibt
+         * bei der Vorgabe; nachgesehen im mitgelieferten Quelltext bei `e9fa078`.
+         *
+         * OkHttp behält eine Verbindung dagegen **fünf Minuten** im Pool. Zwischen zwei
+         * Fragen liegt beim Sprechen mehr als eine halbe Minute, und dann greift Neon nach
+         * einer Verbindung, die der Server längst zugemacht hat. Auf dem Gerät sah das so aus:
+         *
+         * | Pause vor der Frage | Ergebnis |
+         * |---|---|
+         * | erste Frage, frische Verbindung | Antwort |
+         * | 17 s | Antwort |
+         * | 34 s | `unexpected end of stream` |
+         * | 51 s | `unexpected end of stream` |
+         *
+         * Drei Sekunden liegen unter der Frist des Servers. Damit wirft Neon die Verbindung
+         * weg, **bevor** der Server sie zumacht — der Wettlauf entfällt, statt dass man sich
+         * von ihm erholt.
+         */
+        private const val POOL_KEEP_ALIVE_SECONDS = 3L
+
+        /**
          * Kein Lesezeitlimit.
          *
          * Zwischen zwei Token eines langsam rechnenden Modells können auf einem Telefon
@@ -275,7 +334,16 @@ class LlamaServerClient(
             .connectTimeout(2, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
-            .retryOnConnectionFailure(false)
+            // Eine Verbindung reicht: Es fragt immer nur ein Durchgang, dafür sorgt die
+            // Sperre im Gesprächsablauf.
+            .connectionPool(ConnectionPool(1, POOL_KEEP_ALIVE_SECONDS, TimeUnit.SECONDS))
+            // Hier stand `false` mit der Begründung, localhost antworte entweder sofort oder
+            // gar nicht. Das stimmt für den Verbindungsaufbau und ist für eine **gepoolte**
+            // Verbindung falsch: Deren Scheitern heißt nicht „der Server ist weg", sondern
+            // „diese Verbindung war alt". Genau davon soll sich Neon erholen dürfen. Ein
+            // erneuter Versuch trifft eine frische Verbindung; auf localhost kostet das
+            // Millisekunden.
+            .retryOnConnectionFailure(true)
             .build()
     }
 }

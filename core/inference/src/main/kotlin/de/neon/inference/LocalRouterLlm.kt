@@ -27,6 +27,18 @@ import kotlinx.coroutines.runBlocking
  */
 class LocalRouterLlm(
     private val engine: InferenceEngine,
+    /**
+     * Wohin ein Fehlschlag geht.
+     *
+     * **Warum das nötig wurde.** Hier stand nur `return null`, und der Router entschied
+     * daraufhin ohne Stufe 2 — lautlos. Im Protokoll des Geräts stehen mehrere
+     * Serveranfragen, zu denen es keine einzige Neon-Zeile gibt: Ob die Einordnung gelang
+     * oder still scheiterte, ließ sich nicht entscheiden. Ein Rückfall auf die Regelstufe ist
+     * kein Fehler, aber er ist eine Auskunft — und eine, die niemand bekam.
+     *
+     * Eine Funktion und nicht `NeonLog`, weil dieses Modul ohne Android prüfbar bleibt.
+     */
+    private val log: (String) -> Unit = {},
 ) : RouterLlm {
 
     /**
@@ -55,13 +67,27 @@ class LocalRouterLlm(
             )
         ).toList()
 
-        if (chunks.any { it is GenerationChunk.Failed }) return null
+        val gescheitert = chunks.filterIsInstance<GenerationChunk.Failed>().firstOrNull()
+        if (gescheitert != null) {
+            log(
+                "Einordnung gescheitert, entscheide nach Regeln — ${gescheitert.reason}" +
+                    gescheitert.detail?.let { " · $it" }.orEmpty()
+            )
+            return null
+        }
 
         val raw = chunks
             .filterIsInstance<GenerationChunk.Token>()
             .joinToString("") { it.text }
 
         return RouterLlmProtocol.parse(raw)
+            // Auch das ist ein Fehlschlag, nur ein anderer: Der Server lieferte, die Ausgabe
+            // ließ sich aber nicht auswerten. Ohne Zeile sieht das genauso aus wie „Stufe 2
+            // war gar nicht dran".
+            ?: run {
+                log("Einordnung unlesbar, entscheide nach Regeln — \"${raw.take(120)}\"")
+                null
+            }
     }
 
     private companion object {

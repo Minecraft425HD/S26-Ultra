@@ -216,6 +216,15 @@ Deshalb zwei Wege:
   wird als allererste Anweisung installiert, noch vor allem anderen.
 - **Fehler im Betrieb.** *Diagnose → Protokoll* zeigt die letzten Zeilen, ebenfalls mit
   **Teilen**. Die Ausgabe von `llama-server` steht vollständig darin.
+- **Verbindungsalter.** `llama-server` benutzt cpp-httplib, und die schließt eine untätige
+  Keep-Alive-Verbindung nach fünf Sekunden (`CPPHTTPLIB_KEEPALIVE_TIMEOUT_SECOND`; llama.cpp
+  ruft `set_keep_alive_timeout` nirgends auf). OkHttp behielt sie fünf Minuten — und zwischen
+  zwei gesprochenen Fragen liegt oft mehr als eine halbe Minute. Auf dem Gerät gelang jede
+  erste Frage und jede nach 17 Sekunden, während die nach 34 und 51 Sekunden mit
+  `unexpected end of stream` endete. Neons Pool gibt eine Verbindung deshalb nach drei
+  Sekunden auf, also **bevor** der Server sie zumacht, und ein Fehlschlag auf einer gepoolten
+  Verbindung darf einen zweiten Versuch kosten. Die Pause vor der Anfrage steht in der
+  Abbruchzeile: Ein Muster aus vier Beobachtungen ist noch kein Beweis.
 - **Abgebrochene Antwort.** Bricht der Strom mitten in der Antwort ab, meldet OkHttp
   `unexpected end of stream on http://127.0.0.1:18080/` — die Meldung sagt, *dass* die
   Gegenseite weg war, und nichts darüber, warum. Neon sieht deshalb nach, ob der

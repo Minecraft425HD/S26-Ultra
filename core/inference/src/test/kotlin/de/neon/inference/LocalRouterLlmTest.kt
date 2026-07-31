@@ -112,6 +112,55 @@ class LocalRouterLlmTest {
         assertNull(LocalRouterLlm(engine).analyzeSuspending(Utterance("hallo")))
     }
 
+    /**
+     * Ein Rückfall auf die Regelstufe ist kein Fehler — aber er ist eine Auskunft.
+     *
+     * **Der Anlass.** Im Protokoll des Geräts stehen mehrere Serveranfragen, zu denen es
+     * keine einzige Neon-Zeile gibt. Ob die Einordnung gelang oder still scheiterte, war
+     * nicht zu entscheiden: Hier stand `return null`, und damit sah ein Fehlschlag genauso
+     * aus wie „Stufe 2 war gar nicht dran".
+     */
+    @Test
+    fun `ein Fehlschlag der Einordnung hinterlaesst eine Zeile`() = runTest {
+        val zeilen = mutableListOf<String>()
+        val engine = ScriptedEngine("", fails = true)
+
+        assertNull(
+            LocalRouterLlm(engine, log = { zeilen += it }).analyzeSuspending(Utterance("hallo"))
+        )
+
+        val zeile = zeilen.singleOrNull()
+        assertNotNull(zeile, "nichts protokolliert")
+        assertTrue(zeile.contains("Regeln"), zeile)
+        assertTrue(zeile.contains("Server nicht erreichbar"), zeile)
+    }
+
+    @Test
+    fun `auch eine unlesbare Ausgabe hinterlaesst eine Zeile`() = runTest {
+        val zeilen = mutableListOf<String>()
+        val engine = ScriptedEngine("Das ist eine interessante Frage!")
+
+        LocalRouterLlm(engine, log = { zeilen += it }).analyzeSuspending(Utterance("hallo"))
+
+        // Die Ausgabe selbst gehört dazu: Ohne sie ist nicht zu erkennen, ob das Modell die
+        // Grammatik ignoriert hat oder ob etwas ganz anderes zurückkam.
+        val zeile = zeilen.single()
+        assertTrue(zeile.contains("unlesbar"), zeile)
+        assertTrue(zeile.contains("interessante Frage"), zeile)
+    }
+
+    @Test
+    fun `eine gelungene Einordnung schweigt`() = runTest {
+        val zeilen = mutableListOf<String>()
+        val engine = ScriptedEngine(validJson)
+
+        LocalRouterLlm(engine, log = { zeilen += it }).analyzeSuspending(Utterance("hallo"))
+
+        // Der häufige Fall darf die Protokolldatei nicht füllen — sonst verdrängt er genau
+        // das, was man später lesen will.
+        assertTrue(zeilen.isEmpty(), "$zeilen")
+    }
+
     @Test
     fun `begrenzt die Ausgabelaenge`() = runTest {
         val engine = ScriptedEngine(validJson)
