@@ -46,3 +46,10 @@ tools/train-wakeword/.venv/
 # Prüfsumme, und die CI ruft das Skript vor dem APK-Bau auf. Sieben Megabyte Standardbibliothek
 # in der Versionsgeschichte wären nur eine zweite Wahrheit neben der Prüfsumme.
 app/src/main/assets/python-stdlib.zip
+
+# Die vor-dexten Java-Werkzeuge der Bau-Kette. scripts/build-android-toolchain.sh erzeugt sie
+# aus dem Android SDK, und die CI ruft es vor dem APK-Bau auf. Sie sind ein Umwandlungsschritt
+# aus vorhandenen Dateien, kein eigenes Werk — vier Megabyte davon in der Versionsgeschichte
+# waeren nur eine Kopie mit eigenem Alterungsverhalten.
+app/src/main/assets/d8.dex.jar
+app/src/main/assets/apksigner.dex.jar

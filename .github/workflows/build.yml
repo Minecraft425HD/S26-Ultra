@@ -92,6 +92,12 @@ jobs:
           sudo apt-get install -y patchelf
           ./scripts/fetch-android-tools.sh
 
+      - name: Java-Werkzeuge der Bau-Kette vor-dexen
+        # d8 und apksigner sind Java-Programme. Android führt kein Java-Bytecode aus, sondern
+        # Dex — eine JAR-Datei ist dort so unbrauchbar wie eine Textdatei. Umgewandelt wird
+        # deshalb hier, auf einem Rechner mit JVM: d8 wandelt sich selbst um, einmal.
+        run: ./scripts/build-android-toolchain.sh
+
       - name: Python-Umgebung für das Telefon holen
         # Offizielles CPython von python.org — seit 3.13 ist Android eine unterstützte
         # Plattform. Selbst zu bauen würde zwanzig Minuten je Runde kosten und dasselbe

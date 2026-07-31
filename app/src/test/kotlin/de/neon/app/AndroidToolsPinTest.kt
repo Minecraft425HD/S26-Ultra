@@ -182,6 +182,64 @@ class AndroidToolsPinTest {
         )
     }
 
+
+    /**
+     * Kein Skript zaehlt `grep -c` mit einem festen Feld.
+     *
+     * **Der Anlass.** `grep -c` stellt den Dateinamen nur voran, wenn es **mehrere** Dateien
+     * gibt. Bei zwei Dex-Dateien lautet die Zeile `classes2.dex:2`, bei einer schlicht `1`.
+     * Ein `awk -F: '{s+=$2}'` zaehlt den zweiten Fall als null — und meldete beim Vor-Dexen
+     * von `apksigner` eine Einstiegsklasse als fehlend, die da war.
+     *
+     * Das ist derselbe Fehlertyp wie `grep -q` unter `pipefail`: Die Pruefung schlaegt an,
+     * obwohl alles stimmt, und man sucht am falschen Ende. `$NF` ist in beiden Faellen die
+     * Zahl.
+     */
+    @Test
+    fun `kein Skript zaehlt grep -c mit einem festen Feld`() {
+        val skripte = File(wurzel(), "scripts").listFiles { f -> f.extension == "sh" }.orEmpty()
+
+        val treffer = skripte.flatMap { datei ->
+            datei.readLines().mapIndexedNotNull { index, zeile ->
+                val code = zeile.substringBefore('#')
+                // Eine awk-Summierung ueber ein festes Feld, direkt hinter einem grep -c.
+                if (Regex("""awk\s+-F:\s*'\{s\+=\$[0-9]""").containsMatchIn(code)) {
+                    "${datei.name}:${index + 1}: ${zeile.trim()}"
+                } else {
+                    null
+                }
+            }
+        }
+
+        assertTrue(
+            treffer.isEmpty(),
+            "awk -F: mit festem Feld hinter grep -c. Bei einer einzigen Datei stellt grep " +
+                "keinen Dateinamen voran, und die Zaehlung ergibt null:\n" +
+                treffer.joinToString("\n"),
+        )
+    }
+
+    /**
+     * Die vor-dexten Werkzeuge werden auf ihre Einstiegsklasse geprueft.
+     *
+     * Eine Dex-Datei, die entsteht und die falsche oder gar keine Klasse enthaelt, faellt
+     * sonst erst auf dem Telefon auf — als ClassNotFoundException mitten in einem
+     * Bauvorgang, den jemand angestossen hat.
+     */
+    @Test
+    fun `das Vor-Dexen prueft die Einstiegsklassen`() {
+        val skript = File(wurzel(), "scripts/build-android-toolchain.sh")
+        assertTrue(skript.isFile, "${skript.path} fehlt")
+        val text = skript.readText()
+
+        assertTrue(text.contains("com.android.tools.r8.D8"), "d8 ohne Einstiegsklasse")
+        assertTrue(
+            text.contains("com.android.apksigner.ApkSignerTool"),
+            "apksigner ohne Einstiegsklasse",
+        )
+        assertTrue(text.contains("min-api"), "keine Dex-Untergrenze angegeben")
+    }
+
     private fun wurzel(): File {
         var verzeichnis = File("").absoluteFile
         while (!File(verzeichnis, "settings.gradle.kts").exists()) {
