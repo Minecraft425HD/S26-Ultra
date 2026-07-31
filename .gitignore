@@ -31,6 +31,11 @@ app/src/main/jniLibs/arm64-v8a/*.so
 # könnte niemand ohne NDK eine funktionierende APK bauen — und genau das ist das Ziel.
 !app/src/main/jniLibs/arm64-v8a/libllama-server.so
 
+# Der Python-Starter aus demselben Grund: Er braucht das NDK, die CI hat keines, und er ist
+# acht Kilobyte groß. scripts/build-python-launcher.sh baut ihn neu, wenn die Python-Fassung
+# wechselt — worauf scripts/fetch-python.sh ausdrücklich hinweist, wenn es nicht mehr passt.
+!app/src/main/jniLibs/arm64-v8a/libpython-launcher.so
+
 # Trainingsausgaben und eigene Aufnahmen.
 tools/train-wakeword/recordings/
 tools/train-wakeword/.venv/

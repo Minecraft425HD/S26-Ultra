@@ -179,6 +179,29 @@ if (( TESTS > 0 )); then
     FEHLER=1
 fi
 
+# Und passt der Starter noch zu dieser Python-Fassung?
+#
+# **Der Fehler, den das verhindert.** libpython3.14.so und libpython3.15.so sind zwei
+# verschiedene Namen. Der Starter ist gegen einen davon gebaut und trägt ihn fest in sich. Wird
+# hier die Python-Fassung angehoben, ohne den Starter neu zu bauen, liegt in der APK ein
+# Programm, das eine Bibliothek verlangt, die nicht mehr mitkommt — und das fällt erst auf dem
+# Telefon auf, als "Python startet nicht".
+#
+# Der Starter ist eingecheckt, weil die CI kein NDK hat. Genau deshalb kann er hier veralten,
+# ohne dass es jemand merkt.
+LAUNCHER="$JNILIBS/libpython-launcher.so"
+if [[ -f "$LAUNCHER" ]] && command -v readelf >/dev/null; then
+    KURZE_FASSUNG="${KURZFASSUNG#python}"       # 3.14
+    VERLANGT=$(readelf -dW "$LAUNCHER" | grep -oE 'libpython[0-9.]+\.so' | head -1)
+    if [[ "$VERLANGT" != "libpython$KURZE_FASSUNG.so" ]]; then
+        warn "  Der Starter verlangt $VERLANGT, mitgeliefert wird libpython$KURZE_FASSUNG.so.
+     Mit scripts/build-python-launcher.sh neu bauen (braucht ANDROID_NDK)."
+        FEHLER=1
+    else
+        log "  der Starter passt zu $KURZFASSUNG"
+    fi
+fi
+
 (( FEHLER == 0 )) || die "So ist die Umgebung nicht benutzbar. Siehe die Meldungen oben."
 
 log "fertig:"
