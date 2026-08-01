@@ -44,6 +44,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import de.neon.audio.CascadeStats
 import de.neon.audio.WakeWordPipeline
+import de.neon.inference.ModelLifecycleManager
 import de.neon.inference.ModelStore
 import de.neon.inference.ProcessServerSupervisor
 import de.neon.platform.NeonLog
@@ -339,6 +340,7 @@ class MainActivity : ComponentActivity() {
                 lastTurn = ready.orchestrator.lastTurn.collectAsState().value,
                 models = ready.registry.generativeModels(),
                             isModelAvailable = { ready.modelStore.isAvailable(it) },
+                            gemesseneGroesse = { ready.modelStore.gemesseneGroesse(it) },
                             wakeWordAvailable = ready.wakeWordAvailable,
                             inferenceAvailable = ready.inferenceAvailable,
                             importState = importState.collectAsState().value,
@@ -515,6 +517,8 @@ private fun NeonScreen(
     lastTurn: TurnReport?,
     models: List<ModelSpec>,
     isModelAvailable: (ModelSpec) -> Boolean,
+    /** Die wirkliche Dateigröße, oder `null`, solange nichts importiert ist. */
+    gemesseneGroesse: (ModelSpec) -> Long?,
     wakeWordAvailable: Boolean,
     inferenceAvailable: Boolean,
     importState: ImportState,
@@ -762,10 +766,26 @@ private fun NeonScreen(
                         models.forEach { model ->
                             val available = isModelAvailable(model)
                             val projektorFehlt = model.needsProjector && !available
+                            // Solange nichts importiert ist, bleibt die Angabe aus der
+                            // Registry das Beste, was man sagen kann — sie beschreibt dann
+                            // eine Datei, die man erst noch besorgen muss. Sobald sie da
+                            // ist, gilt die Datei: „4,5 GB" über einer 378-MB-Datei zu
+                            // schreiben, während darunter „vorhanden" steht, ist schlicht
+                            // falsch.
+                            val gemessen = gemesseneGroesse(model)
                             Text(
-                                "${model.displayName} — ${gigabytes(model.sizeBytes)}",
+                                "${model.displayName} — ${gigabytes(gemessen ?: model.sizeBytes)}",
                                 style = MaterialTheme.typography.bodyMedium,
                             )
+                            if (gemessen != null &&
+                                ModelLifecycleManager.weichtAb(model.sizeBytes, gemessen)
+                            ) {
+                                Text(
+                                    "Der Eintrag nennt ${gigabytes(model.sizeBytes)} — die " +
+                                        "importierte Datei ist etwas anderes als dieser Name.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
                             Text(
                                 "Rolle: ${model.role.name.lowercase()}, " +
                                     "Komplexität ${model.minComplexity}–${model.maxComplexity}",

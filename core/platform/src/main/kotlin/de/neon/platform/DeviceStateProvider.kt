@@ -28,6 +28,13 @@ class DeviceStateProvider(
      */
     private val availableModelIds: (() -> Set<String>)? = null,
     /**
+     * Die tatsächlichen Dateigrößen; kommt ebenfalls vom ModelStore.
+     *
+     * Wie [availableModelIds] bei jedem Durchgang neu gelesen: Ein Import ändert die Antwort,
+     * und zwar sofort.
+     */
+    private val gemesseneGroessen: (() -> Map<String, Long>)? = null,
+    /**
      * Rückfallwert, falls sich der freie Speicher nicht messen lässt.
      *
      * Nicht mehr das Budget selbst: Das wird gemessen. Siehe [availableForModels].
@@ -47,6 +54,7 @@ class DeviceStateProvider(
         loadedModelIds = warmModelIds(),
         availableMemoryBytes = availableForModels(),
         availableModelIds = availableModelIds?.invoke(),
+        gemesseneGroessen = gemesseneGroessen?.invoke() ?: emptyMap(),
     )
 
     private fun batteryPercent(): Int =

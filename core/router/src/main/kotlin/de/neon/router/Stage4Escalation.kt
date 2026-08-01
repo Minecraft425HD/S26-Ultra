@@ -83,6 +83,6 @@ class EscalationPolicy(
         return vorhanden
             .filter { state.fitsInMemory(it) }
             .maxByOrNull { it.maxComplexity }
-            ?: vorhanden.minBy { it.sizeBytes }
+            ?: vorhanden.minBy { state.groesse(it) }
     }
 }

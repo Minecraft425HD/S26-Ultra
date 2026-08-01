@@ -140,6 +140,14 @@ class NeonContainer(context: Context) {
         availableModelIds = {
             registry.models.filter { modelStore.isAvailable(it) }.map { it.id }.toSet()
         },
+        // Und wie groß sie wirklich sind. Der Eintrag `qwen3-coder-7b` nennt 4,5 GB; die
+        // Datei auf dem Gerät hatte 378 MB. Mit der Behauptung gerechnet hätte Neon dieses
+        // Modell bei knappem Speicher abgelehnt, obwohl es zwölfmal kleiner ist als gedacht.
+        gemesseneGroessen = {
+            registry.models.mapNotNull { modell ->
+                modelStore.gemesseneGroesse(modell)?.let { modell.id to it }
+            }.toMap()
+        },
     )
 
     /**

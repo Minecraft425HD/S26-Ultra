@@ -48,6 +48,22 @@ data class DeviceState(
      * brauchbares bereitlag.
      */
     val availableModelIds: Set<String>? = null,
+    /**
+     * Wie groß die vorhandenen Modelldateien **wirklich** sind, nach Modellkennung.
+     *
+     * [ModelSpec.sizeBytes] ist eine Angabe im Quelltext und damit eine Behauptung über eine
+     * Datei, die jemand später importiert. Auf dem Gerät wich sie um den Faktor zwölf ab: Der
+     * Eintrag `qwen3-coder-7b` nennt 4,5 GB, die importierte Datei war 378 MB — und alles,
+     * was an der Größe hängt, rechnete mit der Behauptung.
+     *
+     * Die Folgen gingen in beide Richtungen. Zu groß geschätzt heißt: Neon lehnt ein Modell
+     * wegen Speichermangels ab, das mühelos hineinpasst. Zu klein geschätzt heißt: Neon lädt
+     * eines, für das der Platz nicht reicht — und Android erschlägt den Serverprozess.
+     *
+     * Ein leerer Eintrag heißt „nicht gemessen", nicht „null Bytes"; dann gilt weiter die
+     * Angabe aus der Registry. Siehe [groesse].
+     */
+    val gemesseneGroessen: Map<String, Long> = emptyMap(),
 ) {
     /**
      * Sparmodus: Der Akku ist knapp und das Gerät hängt nicht am Ladegerät, oder es
@@ -62,8 +78,17 @@ data class DeviceState(
 
     fun isLoaded(model: ModelSpec): Boolean = model.id in loadedModelIds
 
+    /**
+     * Wie viel Platz dieses Modell braucht — gemessen, wo die Datei da ist.
+     *
+     * Die Untergrenze des Speicherbedarfs ist die Dateigröße, und die kennt man, sobald die
+     * Datei auf der Platte liegt. Nur solange sie fehlt, bleibt die Registry-Angabe die
+     * einzige Auskunft, und dann ist eine Schätzung besser als keine Zahl.
+     */
+    fun groesse(model: ModelSpec): Long = gemesseneGroessen[model.id] ?: model.sizeBytes
+
     fun fitsInMemory(model: ModelSpec): Boolean =
-        isLoaded(model) || model.sizeBytes <= availableMemoryBytes
+        isLoaded(model) || groesse(model) <= availableMemoryBytes
 
     /** Bei unbekanntem Bestand gilt jedes Modell als vorhanden — siehe [availableModelIds]. */
     fun isAvailable(model: ModelSpec): Boolean =

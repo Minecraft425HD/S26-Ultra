@@ -116,7 +116,7 @@ class SelectionPolicy(
         // Im Sparmodus bleiben große Modelle außen vor — es sei denn, sie liegen ohnehin
         // schon im Speicher, dann kostet ihre Nutzung keine Ladeenergie mehr.
         if (!relaxed && state.isConstrained && !state.isLoaded(model)) {
-            if (model.sizeBytes > CONSTRAINED_MAX_SIZE_BYTES) return false
+            if (state.groesse(model) > CONSTRAINED_MAX_SIZE_BYTES) return false
         }
         return true
     }
@@ -147,8 +147,8 @@ class SelectionPolicy(
         val gewaehlt = passend.maxWithOrNull(
             // Zuerst die Abdeckung, dann die Größe: Bei gleicher Abdeckung gewinnt das
             // kleinere Modell, weil es schneller lädt und weniger Strom kostet.
-            compareBy<ModelSpec> { it.maxComplexity }.thenByDescending { it.sizeBytes },
-        ) ?: pool.minBy { it.sizeBytes }
+            compareBy<ModelSpec> { it.maxComplexity }.thenByDescending { state.groesse(it) },
+        ) ?: pool.minBy { state.groesse(it) }
 
         return listOf(gewaehlt)
     }
