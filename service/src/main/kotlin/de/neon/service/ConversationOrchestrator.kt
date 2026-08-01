@@ -20,7 +20,10 @@ import de.neon.router.TaskCategory
 import de.neon.router.Utterance
 import de.neon.router.UserSignal
 import de.neon.speech.AsrEngine
+import de.neon.tools.Fertig
+import de.neon.tools.Rueckfrage
 import de.neon.tools.ToolRegistry
+import de.neon.tools.WorkspaceToolset
 import de.neon.tools.ToolResult
 import de.neon.workspace.gekuerzt
 import de.neon.speech.SentenceChunker
@@ -551,8 +554,20 @@ class ConversationOrchestrator(
         }
 
         if (passendeWerkzeuge != null) {
+            // Wie viele Runden erlaubt sind, hängt daran, **was** getan wird. Die
+            // Programmierwerkzeuge dürfen ketten: „leg das Projekt an und bau es" sind zwei
+            // Handlungen, und mit einer Runde fiel die zweite still unter den Tisch. Die
+            // Gerätewerkzeuge bleiben bei einer — dort werden am Ende echte Geräte
+            // geschaltet, und ein Modell, das aus eigenem Antrieb nachlegt, ist etwas
+            // anderes als eines, das eine zweite Datei schreibt.
+            val runden = if (selection.analysis.category == TaskCategory.CODE) {
+                WorkspaceToolset.RUNDEN
+            } else {
+                1
+            }
             return handleToolCall(
-                selection, utterance, transcript, memoryContext, startedAt, passendeWerkzeuge,
+                selection, utterance, transcript, memoryContext, startedAt,
+                passendeWerkzeuge, runden,
             )
         }
 
@@ -700,126 +715,211 @@ class ConversationOrchestrator(
          * Zusammenstellung genommen.
          */
         registry: ToolRegistry,
+        /**
+         * Wie viele Werkzeuge Neon für diesen Auftrag hintereinander benutzen darf.
+         *
+         * **Eins war zu wenig, und zwar sichtbar.** Auf „mach mir eine Zähler-App und
+         * erstelle das Projekt, danach direkt kompilieren" legte Neon das Projekt an und
+         * hörte auf — der zweite Halbsatz fiel stillschweigend unter den Tisch. Dasselbe bei
+         * jedem „lies die Datei, ändere sie, prüf das Ergebnis".
+         *
+         * **Und mehr als eins ist nicht überall richtig.** Die Gerätewerkzeuge bleiben bei
+         * einer Runde. Dort werden am Ende echte Geräte geschaltet, und ein Modell, das aus
+         * eigenem Antrieb nachlegt, ist dabei etwas anderes als eines, das eine zweite Datei
+         * schreibt. Deshalb entscheidet der Aufrufer und nicht diese Stelle.
+         */
+        rundenGrenze: Int,
     ): TurnReport {
-        val raw = StringBuilder()
-        var tokens = 0
-        var failure: String? = null
-        var failureDetail: String? = null
+        // Was in dieser Kette schon geschah, für das Modell lesbar. Ohne diesen Verlauf
+        // begänne jede Runde bei null: Das Modell wüsste nicht, dass das Projekt bereits
+        // angelegt ist, und legte es noch einmal an.
+        val kettenVerlauf = mutableListOf<ChatMessage>()
 
-        engine.generate(
-            GenerationRequest(
-                messages = buildList {
-                    add(
-                        ChatMessage(
-                            Role.SYSTEM,
-                            NeonPrompts.systemPrompt(
-                                memoryContext = memoryContext,
-                                toolDescription = registry.promptDescription(),
-                                spoken = speakThisTurn,
-                                // Auch hier: "ändere die markierte Stelle" ist ein
-                                // Werkzeugaufruf, und ohne den Ausschnitt wüsste das Modell
-                                // nicht, welche Stelle gemeint ist.
-                                selection = selectionThisTurn,
-                            ),
+        // Zur Schleifenerkennung: Werkzeugname samt Argumenten. Zweimal derselbe Aufruf
+        // heißt, dass das Modell sich im Kreis dreht — und bei zwölf Token je Sekunde ist
+        // eine Runde im Kreis eine halbe Minute, die niemand zurückbekommt.
+        val schonDagewesen = mutableSetOf<String>()
+
+        val gesprochenes = mutableListOf<String>()
+        var tokensGesamt = 0
+        var letztesWerkzeug: String? = null
+
+        for (runde in 1..rundenGrenze) {
+            val raw = StringBuilder()
+            var tokens = 0
+            var failure: String? = null
+            var failureDetail: String? = null
+
+            engine.generate(
+                GenerationRequest(
+                    messages = buildList {
+                        add(
+                            ChatMessage(
+                                Role.SYSTEM,
+                                NeonPrompts.systemPrompt(
+                                    memoryContext = memoryContext,
+                                    toolDescription = registry.promptDescription(),
+                                    spoken = speakThisTurn,
+                                    // Auch hier: "ändere die markierte Stelle" ist ein
+                                    // Werkzeugaufruf, und ohne den Ausschnitt wüsste das
+                                    // Modell nicht, welche Stelle gemeint ist.
+                                    selection = selectionThisTurn,
+                                ),
+                            )
                         )
-                    )
-                    addAll(turnHistory)
-                    add(ChatMessage(Role.USER, utterance.text))
-                },
-                // Die Grenze kommt von den Werkzeugen und nicht von einer Konstante hier.
-                // Bei festen 128 Token brach jeder `datei-schreiben`-Aufruf nach rund 400
-                // Zeichen mitten im Inhalt ab; danach war es kein JSON mehr, und der Nutzer
-                // hörte „Das habe ich nicht als Befehl verstanden" — bei einem Aufruf, den
-                // das Modell völlig richtig begonnen hatte.
-                maxTokens = registry.maxAntwortToken(),
-                temperature = 0f,
-                // Erzwungene Grammatik: Auch ein 4B-Modell gibt damit einen gültigen
-                // Aufruf aus, statt in Prosa zu beschreiben, was es tun würde.
-                grammar = registry.grammar(),
-            )
-        ).collect { chunk ->
-            when (chunk) {
-                is GenerationChunk.Token -> {
-                    tokens++
-                    raw.append(chunk.text)
-                }
+                        addAll(turnHistory)
+                        add(ChatMessage(Role.USER, utterance.text))
+                        addAll(kettenVerlauf)
+                    },
+                    // Die Grenze kommt von den Werkzeugen und nicht von einer Konstante
+                    // hier. Bei festen 128 Token brach jeder `datei-schreiben`-Aufruf nach
+                    // rund 400 Zeichen mitten im Inhalt ab; danach war es kein JSON mehr,
+                    // und der Nutzer hörte „Das habe ich nicht als Befehl verstanden" — bei
+                    // einem Aufruf, den das Modell völlig richtig begonnen hatte.
+                    maxTokens = registry.maxAntwortToken(),
+                    temperature = 0f,
+                    // Erzwungene Grammatik: Auch ein 4B-Modell gibt damit einen gültigen
+                    // Aufruf aus, statt in Prosa zu beschreiben, was es tun würde.
+                    grammar = registry.grammar(),
+                )
+            ).collect { chunk ->
+                when (chunk) {
+                    is GenerationChunk.Token -> {
+                        tokens++
+                        raw.append(chunk.text)
+                    }
 
-                is GenerationChunk.Done -> Unit
-                is GenerationChunk.Failed -> {
-                    failure = chunk.reason
-                    failureDetail = chunk.detail
+                    is GenerationChunk.Done -> Unit
+                    is GenerationChunk.Failed -> {
+                        failure = chunk.reason
+                        failureDetail = chunk.detail
+                    }
                 }
+            }
+            tokensGesamt += tokens
+
+            failure?.let { grund ->
+                // Was vorher gelang, ist trotzdem geschehen — eine angelegte Datei bleibt
+                // angelegt. Deshalb wird der Abbruch gemeldet und nicht so getan, als sei
+                // der ganze Durchgang folgenlos gewesen.
+                return abbruch(
+                    transcript, selection, tokensGesamt, grund, failureDetail, startedAt,
+                    weg = if (runde == 1) "Werkzeugaufruf" else "Werkzeugaufruf, Runde $runde",
+                )
+            }
+
+            val call = ToolRegistry.parseCall(raw.toString())
+            if (call == null) {
+                // **Mit der Rohausgabe.** Ohne sie stand hier nur, dass etwas nicht
+                // verstanden wurde — und die eigentliche Frage, *was* das Modell denn
+                // ausgegeben hat, war nicht zu beantworten. Genau daran ließ sich der
+                // abgeschnittene Aufruf nicht erkennen: Ein bei 128 Token gekapptes JSON
+                // sieht in der Sprechblase aus wie ein Modell, das den Auftrag nicht
+                // verstanden hat.
+                log(
+                    "Werkzeugaufruf unlesbar in Runde $runde — ${selection.model.id}, " +
+                        "$tokens Token, ${registry.specs.size} Werkzeuge angeboten, " +
+                        "Rohausgabe: " + raw.toString().gekuerzt(ROHAUSGABE_IM_PROTOKOLL)
+                )
+                if (gesprochenes.isEmpty()) {
+                    return speakProblem(
+                        transcript = transcript,
+                        message = "Das habe ich nicht als Befehl verstanden.",
+                        selection = selection.reason,
+                        startedAt = startedAt,
+                    )
+                }
+                break
+            }
+
+            letztesWerkzeug = call.name
+
+            if (call.name == Fertig.NAME) {
+                val abschluss = registry.execute(call)
+                val satz = when (abschluss) {
+                    is ToolResult.Ok -> abschluss.spoken
+                    is ToolResult.Failed -> abschluss.spoken
+                }
+                log("Werkzeugkette beendet nach $runde Runde(n) — $tokensGesamt Token")
+                say(satz)
+                gesprochenes += satz
+                break
+            }
+
+            val schluessel = call.name + call.arguments.entries.sortedBy { it.key }
+                .joinToString { "${it.key}=${it.value}" }
+            if (!schonDagewesen.add(schluessel)) {
+                log(
+                    "Werkzeugkette dreht sich im Kreis — ${call.name} zum zweiten Mal mit " +
+                        "denselben Angaben, Abbruch nach Runde $runde"
+                )
+                break
+            }
+
+            val vorAusfuehrung = clock()
+            val result = registry.execute(call)
+            val ausgefuehrt = clock() - vorAusfuehrung
+
+            // **Jeder Werkzeugaufruf hinterlässt eine Zeile.** Hier stand keine, und deshalb
+            // war von der gescheiterten Projekterstellung im Protokoll nichts zu sehen:
+            // nicht welches Werkzeug gewählt wurde, nicht mit welchen Angaben, nicht was
+            // dabei herauskam. Das Protokoll endete beim `print_timing` des Servers und
+            // schwieg über alles danach.
+            //
+            // Die Argumente gekürzt, aber vorhanden: Ein `datei-schreiben` mit dem falschen
+            // Pfad sieht im Ergebnis genauso aus wie eines mit dem richtigen.
+            val ergebnis = when (result) {
+                is ToolResult.Ok -> "gelungen"
+                is ToolResult.Failed -> "gescheitert — ${result.reason}"
+            }
+            log(
+                "Runde $runde von $rundenGrenze: Werkzeug ${call.name} $ergebnis — " +
+                    "$ausgefuehrt ms, ${selection.model.id}, $tokens Token für den Aufruf" +
+                    call.arguments.entries.joinToString("") { (name, wert) ->
+                        " · $name=${wert.gekuerzt(ARGUMENT_IM_PROTOKOLL)}"
+                    }
+            )
+
+            val spoken = when (result) {
+                is ToolResult.Ok -> result.spoken
+                is ToolResult.Failed -> result.spoken
+            }
+            // **Jeder Zwischenschritt wird gesprochen, nicht nur das Ende.** Ein Bauvorgang
+            // dauert auf dem Telefon über eine Minute; zwei Minuten Schweigen nach „mach mir
+            // eine App" sind von einem Absturz nicht zu unterscheiden.
+            say(spoken)
+            gesprochenes += spoken
+
+            // Eine Rückfrage ist das Ende der Kette, egal wie viele Runden noch offen wären:
+            // Weiterzuarbeiten hieße, die eigene Frage zu übergehen.
+            if (call.name == Rueckfrage.NAME) break
+
+            // Das Ergebnis zurück ins Gespräch. Der Aufruf als das, was Neon getan hat, das
+            // Ergebnis als das, was dabei herauskam — zwei Nachrichten und nicht eine,
+            // damit das Modell den eigenen Zug von der Antwort der Welt unterscheiden kann.
+            kettenVerlauf += ChatMessage(Role.ASSISTANT, raw.toString().trim())
+            kettenVerlauf += ChatMessage(
+                Role.USER,
+                "Ergebnis von ${call.name}: ${spoken.gekuerzt(ERGEBNIS_IM_VERLAUF)}",
+            )
+
+            if (runde == rundenGrenze) {
+                log("Werkzeugkette an der Rundengrenze ($rundenGrenze) beendet")
             }
         }
 
-        failure?.let { grund ->
-            return abbruch(
-                transcript, selection, tokens, grund, failureDetail, startedAt,
-                weg = "Werkzeugaufruf",
-            )
-        }
-
-        val call = ToolRegistry.parseCall(raw.toString())
-        if (call == null) {
-            // **Mit der Rohausgabe.** Ohne sie stand hier nur, dass etwas nicht verstanden
-            // wurde — und die eigentliche Frage, *was* das Modell denn ausgegeben hat, war
-            // nicht zu beantworten. Genau daran ließ sich der abgeschnittene Aufruf nicht
-            // erkennen: Ein bei 128 Token gekapptes JSON sieht in der Sprechblase aus wie
-            // ein Modell, das den Auftrag nicht verstanden hat.
-            log(
-                "Werkzeugaufruf unlesbar — ${selection.model.id}, $tokens Token, " +
-                    "${registry.specs.size} Werkzeuge angeboten, Rohausgabe: " +
-                    raw.toString().gekuerzt(ROHAUSGABE_IM_PROTOKOLL)
-            )
-            return speakProblem(
-                transcript = transcript,
-                message = "Das habe ich nicht als Befehl verstanden.",
-                selection = selection.reason,
-                startedAt = startedAt,
-            )
-        }
-
-        val vorAusfuehrung = clock()
-        val result = registry.execute(call)
-        val ausgefuehrt = clock() - vorAusfuehrung
-
-        // **Jeder Werkzeugaufruf hinterlässt eine Zeile.** Hier stand keine, und deshalb war
-        // von der gescheiterten Projekterstellung im Protokoll nichts zu sehen: nicht welches
-        // Werkzeug gewählt wurde, nicht mit welchen Angaben, nicht was dabei herauskam. Das
-        // Protokoll endete beim `print_timing` des Servers und schwieg über alles danach.
-        //
-        // Die Argumente gekürzt, aber vorhanden: Ein `datei-schreiben` mit dem falschen Pfad
-        // sieht im Ergebnis genauso aus wie eines mit dem richtigen.
-        val ergebnis = when (result) {
-            is ToolResult.Ok -> "gelungen"
-            is ToolResult.Failed -> "gescheitert — ${result.reason}"
-        }
-        log(
-            "Werkzeug ${call.name} $ergebnis — ${ausgefuehrt} ms, " +
-                "${selection.model.id}, $tokens Token für den Aufruf" +
-                call.arguments.entries.joinToString("") { (name, wert) ->
-                    " · $name=${wert.gekuerzt(ARGUMENT_IM_PROTOKOLL)}"
-                }
-        )
-
-        val spoken = when (result) {
-            is ToolResult.Ok -> result.spoken
-            is ToolResult.Failed -> result.spoken
-        }
-
-        say(spoken)
-
+        val antwort = gesprochenes.joinToString("\n").ifBlank { "Ich habe nichts getan." }
         val latency = clock() - startedAt
-        record(transcript, selection.analysis, selection.model.id, latency, tokens)
+        record(transcript, selection.analysis, selection.model.id, latency, tokensGesamt)
 
         return TurnReport(
             transcript = transcript,
-            answer = spoken,
+            answer = antwort,
             modelId = selection.model.id,
-            routeReason = "${selection.reason} — Werkzeug ${call.name}",
+            routeReason = "${selection.reason} — Werkzeug ${letztesWerkzeug ?: "keines"}",
             latencyMs = latency,
             usedNoModel = false,
-            tokenCount = tokens,
+            tokenCount = tokensGesamt,
         )
     }
 
@@ -962,6 +1062,17 @@ class ConversationOrchestrator(
         const val ANTWORT_MAX_TOKENS = 1_024
 
         const val ARGUMENT_IM_PROTOKOLL = 120
+
+        /**
+         * Wie viel eines Werkzeugergebnisses in die nächste Runde mitgeht.
+         *
+         * Knapp gehalten, weil es sich mit jeder Runde aufsummiert und der Prompt ohnehin
+         * der teuerste Teil ist: Auf dem Gerät kosteten tausend Prompt-Token 16 Sekunden vor
+         * dem ersten Wort. Für „Projekt angelegt: drei Dateien" oder eine Fehlermeldung des
+         * Compilers reicht es; wer den vollen Inhalt braucht, liest die Datei.
+         */
+        const val ERGEBNIS_IM_VERLAUF = 400
+
 
         /**
          * Wie viel einer unlesbaren Rohausgabe ins Protokoll geht.

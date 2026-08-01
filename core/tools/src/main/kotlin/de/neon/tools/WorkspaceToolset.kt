@@ -73,9 +73,31 @@ object WorkspaceToolset {
             }
         }
         // Zuletzt, damit es in der Beschreibung unter den Handlungen steht: Erst was Neon
-        // tun kann, dann der Ausweg, wenn unklar ist, welche davon gemeint ist.
+        // tun kann, dann der Ausweg, wenn unklar ist, welche davon gemeint ist, und dann
+        // das Ende der Kette.
         add(Rueckfrage())
+        add(Fertig())
     }
+
+    /**
+     * Wie viele Werkzeugrunden ein Auftrag im Projekt haben darf.
+     *
+     * **Warum mehr als eine.** Eine Runde reicht für „trag mir einen Termin ein" und nicht
+     * für eine Entwicklungsumgebung: „leg das Projekt an und bau es" sind zwei Handlungen,
+     * „lies die Datei, ändere sie, prüf das Ergebnis" sind drei. Mit einer Runde brach Neon
+     * nach der ersten ab und ließ den Rest des Satzes stillschweigend fallen.
+     *
+     * **Warum nicht mehr als vier.** Jede Runde ist eine Erzeugung von rund vierzig Token
+     * plus die Arbeit des Werkzeugs. Ein Bauvorgang dauert für sich schon eine Minute; vier
+     * Runden sind auf diesem Gerät bereits mehrere Minuten. Was darüber hinausginge, wäre
+     * keine Kette mehr, sondern ein Modell, das sich verlaufen hat — und das merkt man
+     * besser früh.
+     *
+     * Die Zahl gilt ausdrücklich **nur hier**. Die Gerätewerkzeuge bleiben bei einer Runde:
+     * Dort werden am Ende echte Geräte geschaltet, und ein Modell, das aus eigenem Antrieb
+     * nachlegt, ist dabei etwas anderes als eines, das eine zweite Datei schreibt.
+     */
+    const val RUNDEN = 4
 
     /**
      * Der Paketname des Projekts, aus dem Manifest gelesen.

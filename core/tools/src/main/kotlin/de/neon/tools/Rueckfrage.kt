@@ -22,7 +22,7 @@ package de.neon.tools
 class Rueckfrage : Tool {
 
     override val spec = ToolSpec(
-        name = "rueckfrage",
+        name = NAME,
         description = "Stellt genau eine kurze Rückfrage und wartet auf die Antwort. " +
             "Nimm das, wenn der Auftrag mehrere ernsthaft verschiedene Lesarten hat und die " +
             "falsche Wahl Arbeit vernichten würde — etwa welche Datei gemeint ist oder was " +
@@ -47,5 +47,15 @@ class Rueckfrage : Tool {
             )
         }
         return ToolResult.Ok(frage)
+    }
+
+    companion object {
+        /**
+         * Damit der Gesprächsablauf die Rückfrage erkennt, ohne den Namen zu erraten.
+         *
+         * Er muss sie erkennen: Eine Rückfrage beendet die Werkzeugkette, gleich wie viele
+         * Runden noch offen wären. Weiterzuarbeiten hieße, die eigene Frage zu übergehen.
+         */
+        const val NAME = "rueckfrage"
     }
 }
