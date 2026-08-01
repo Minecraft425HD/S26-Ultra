@@ -173,6 +173,24 @@ if [[ -n "$OBJDUMP" ]]; then
      stehengebliebenes Bauverzeichnis: -DGGML_CPU_ARM_ARCH wirkt nur beim Konfigurieren.
      $WORK/build-arm64 löschen und neu konfigurieren."
     log "  $SDOT Skalarprodukt-Befehle gefunden (-march=$ARM_ARCH)"
+
+    # Und i8mm, falls es angefordert wurde.
+    #
+    # Warum das eine eigene Pruefung braucht: Ein fehlendes +i8mm ist nicht sichtbar. Die
+    # Datei entsteht, sie laeuft, sie rechnet richtig -- nur eben ohne die Matrixbefehle, und
+    # damit bleibt das Verarbeiten des Prompts bei denselben 65 Token je Sekunde wie vorher.
+    # Ein stehengebliebenes Bauverzeichnis reicht dafuer aus: -DGGML_CPU_ARM_ARCH wirkt nur
+    # beim Konfigurieren. Ohne diese Zeile haette das Skript den Erfolg gemeldet und nichts
+    # geaendert.
+    if [[ "$ARM_ARCH" == *i8mm* ]]; then
+        MMLA=$("$OBJDUMP" -d --no-show-raw-insn "$TARGET" 2>/dev/null \
+            | grep -cE '[[:space:]](smmla|ummla|usmmla)[[:space:]]' || true)
+        (( MMLA > 0 )) || die "kein einziger Matrixbefehl in $TARGET, obwohl +i8mm angefordert
+     wurde. Das Verarbeiten des Prompts bliebe damit so langsam wie zuvor -- 16 Sekunden fuer
+     einen Systemprompt von tausend Token. Ursache ist fast immer ein stehengebliebenes
+     Bauverzeichnis: $WORK/build-arm64 loeschen und neu konfigurieren."
+        log "  $MMLA Matrixbefehle gefunden (i8mm)"
+    fi
 else
     printf '\033[1;33m??\033[0m %s\n' "llvm-objdump fehlt — Befehlssatz nicht geprüft." >&2
 fi
