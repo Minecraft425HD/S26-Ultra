@@ -22,6 +22,7 @@ import de.neon.router.UserSignal
 import de.neon.speech.AsrEngine
 import de.neon.tools.ToolRegistry
 import de.neon.tools.ToolResult
+import de.neon.workspace.gekuerzt
 import de.neon.speech.SentenceChunker
 import de.neon.speech.TtsEngine
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -111,8 +112,14 @@ class ConversationOrchestrator(
     private val actionExecutor: (DeviceAction) -> String?,
     private val outcomeStore: RouteOutcomeStore,
     private val clock: () -> Long = System::currentTimeMillis,
-    /** Werkzeuge für Handlungen, die die Regelstufe nicht abdeckt — Termin, Nachricht. */
-    private val tools: ToolRegistry? = null,
+    /**
+     * Werkzeuge für Handlungen, die die Regelstufe nicht abdeckt — Termin, Nachricht.
+     *
+     * **Eine Funktion und kein Wert.** Siehe [codeTools] — dort steht, was ein
+     * Schnappschuss angerichtet hat. Hier gäbe es das Problem heute nicht, aber zwei
+     * Werkzeuglisten mit zwei verschiedenen Regeln sind eine Regel zu viel.
+     */
+    private val tools: () -> ToolRegistry? = { null },
     /**
      * Werkzeuge fürs Programmieren: Dateien lesen und ändern, Python ausführen.
      *
@@ -124,8 +131,24 @@ class ConversationOrchestrator(
      *
      * Welche Zusammenstellung dran ist, entscheidet die Kategorie: `GERAETE_AKTION` bekommt
      * die eine, `CODE` die andere. Beides gleichzeitig gibt es nicht.
+     *
+     * **Warum eine Funktion und kein Wert — der Fehler, der die IDE lahmgelegt hat.** Hier
+     * stand `ToolRegistry?`, und der Container reichte den Wert beim Bauen herein. Zu diesem
+     * Zeitpunkt waren Python und die Bau-Kette aber noch nicht eingerichtet: Beide packen
+     * knapp fünfzig Megabyte aus und laufen deshalb im Hintergrund, während die App schon
+     * startet. Die Zusammenstellung enthielt in diesem Moment vier Datei-Werkzeuge — und
+     * blieb dabei, für die gesamte Laufzeit des Prozesses.
+     *
+     * Die Folge war nicht etwa ein Fehler, sondern Stille: `app-anlegen`, `app-bauen` und
+     * `python` standen weder im Prompt noch in der Grammatik, also konnte das Modell sie
+     * nicht wählen. Auf „leg mir eine App an" griff es zum nächstbesten Werkzeug, das
+     * dalag. Im Protokoll stand `Bau-Kette bereit` — die Kette war bereit, sie wurde nur
+     * niemandem angeboten.
+     *
+     * Als Funktion wird bei jedem Durchgang neu gefragt. Was fertig eingerichtet ist, ist
+     * dann auch benutzbar.
      */
-    private val codeTools: ToolRegistry? = null,
+    private val codeTools: () -> ToolRegistry? = { null },
     /** Was Neon sich über den Nutzer gemerkt hat. */
     private val memory: MemoryRecall? = null,
     /**
@@ -522,8 +545,8 @@ class ConversationOrchestrator(
         // angebotene Werkzeug, und ein 4-B-Modell, dem `datei-schreiben` neben `termin`
         // angeboten wird, greift irgendwann daneben.
         val passendeWerkzeuge = when (selection.analysis.category) {
-            TaskCategory.GERAETE_AKTION -> tools
-            TaskCategory.CODE -> codeTools
+            TaskCategory.GERAETE_AKTION -> tools()
+            TaskCategory.CODE -> codeTools()
             else -> null
         }
 
@@ -702,7 +725,12 @@ class ConversationOrchestrator(
                     addAll(turnHistory)
                     add(ChatMessage(Role.USER, utterance.text))
                 },
-                maxTokens = TOOL_CALL_MAX_TOKENS,
+                // Die Grenze kommt von den Werkzeugen und nicht von einer Konstante hier.
+                // Bei festen 128 Token brach jeder `datei-schreiben`-Aufruf nach rund 400
+                // Zeichen mitten im Inhalt ab; danach war es kein JSON mehr, und der Nutzer
+                // hörte „Das habe ich nicht als Befehl verstanden" — bei einem Aufruf, den
+                // das Modell völlig richtig begonnen hatte.
+                maxTokens = registry.maxAntwortToken(),
                 temperature = 0f,
                 // Erzwungene Grammatik: Auch ein 4B-Modell gibt damit einen gültigen
                 // Aufruf aus, statt in Prosa zu beschreiben, was es tun würde.
@@ -731,14 +759,49 @@ class ConversationOrchestrator(
         }
 
         val call = ToolRegistry.parseCall(raw.toString())
-            ?: return speakProblem(
+        if (call == null) {
+            // **Mit der Rohausgabe.** Ohne sie stand hier nur, dass etwas nicht verstanden
+            // wurde — und die eigentliche Frage, *was* das Modell denn ausgegeben hat, war
+            // nicht zu beantworten. Genau daran ließ sich der abgeschnittene Aufruf nicht
+            // erkennen: Ein bei 128 Token gekapptes JSON sieht in der Sprechblase aus wie
+            // ein Modell, das den Auftrag nicht verstanden hat.
+            log(
+                "Werkzeugaufruf unlesbar — ${selection.model.id}, $tokens Token, " +
+                    "${registry.specs.size} Werkzeuge angeboten, Rohausgabe: " +
+                    raw.toString().gekuerzt(ROHAUSGABE_IM_PROTOKOLL)
+            )
+            return speakProblem(
                 transcript = transcript,
                 message = "Das habe ich nicht als Befehl verstanden.",
                 selection = selection.reason,
                 startedAt = startedAt,
             )
+        }
 
-        val spoken = when (val result = registry.execute(call)) {
+        val vorAusfuehrung = clock()
+        val result = registry.execute(call)
+        val ausgefuehrt = clock() - vorAusfuehrung
+
+        // **Jeder Werkzeugaufruf hinterlässt eine Zeile.** Hier stand keine, und deshalb war
+        // von der gescheiterten Projekterstellung im Protokoll nichts zu sehen: nicht welches
+        // Werkzeug gewählt wurde, nicht mit welchen Angaben, nicht was dabei herauskam. Das
+        // Protokoll endete beim `print_timing` des Servers und schwieg über alles danach.
+        //
+        // Die Argumente gekürzt, aber vorhanden: Ein `datei-schreiben` mit dem falschen Pfad
+        // sieht im Ergebnis genauso aus wie eines mit dem richtigen.
+        val ergebnis = when (result) {
+            is ToolResult.Ok -> "gelungen"
+            is ToolResult.Failed -> "gescheitert — ${result.reason}"
+        }
+        log(
+            "Werkzeug ${call.name} $ergebnis — ${ausgefuehrt} ms, " +
+                "${selection.model.id}, $tokens Token für den Aufruf" +
+                call.arguments.entries.joinToString("") { (name, wert) ->
+                    " · $name=${wert.gekuerzt(ARGUMENT_IM_PROTOKOLL)}"
+                }
+        )
+
+        val spoken = when (result) {
             is ToolResult.Ok -> result.spoken
             is ToolResult.Failed -> result.spoken
         }
@@ -856,7 +919,22 @@ class ConversationOrchestrator(
         const val ATTACHMENT_CONTEXT_LIMIT = 5
 
         /** Ein Werkzeugaufruf ist kurz; die Grenze schützt vor einem entgleisten Modell. */
-        const val TOOL_CALL_MAX_TOKENS = 128
+        /**
+         * Wie viel eines Arguments ins Protokoll geht.
+         *
+         * Genug, um einen Pfad und den Anfang eines Inhalts zu erkennen — und wenig genug,
+         * dass eine geschriebene Datei die Protokolldatei nicht zweimal enthält.
+         */
+        const val ARGUMENT_IM_PROTOKOLL = 120
+
+        /**
+         * Wie viel einer unlesbaren Rohausgabe ins Protokoll geht.
+         *
+         * Großzügiger als ein Argument: Hier ist die Rohausgabe das ganze Beweismaterial.
+         * Ob ein Aufruf abgeschnitten wurde oder von vornherein Prosa war, sieht man erst
+         * am Ende der Zeichenkette.
+         */
+        const val ROHAUSGABE_IM_PROTOKOLL = 300
 
         // Über PortableRegex, nicht über Regex: Die Wortgrenze muss auf dem Telefon
         // dasselbe bedeuten wie im Test, und das eingebettete Unicode-Flag, das hier

@@ -19,6 +19,20 @@ data class ToolParameter(
     val required: Boolean = true,
     /** Wenn gesetzt, sind nur diese Werte erlaubt. Fließt direkt in die Grammatik ein. */
     val allowedValues: List<String> = emptyList(),
+    /**
+     * Ob hier ganze Dateien hineinpassen müssen.
+     *
+     * **Der Fehler, den das behebt.** Ein Werkzeugaufruf durfte 128 Token lang sein. Das
+     * reicht für „Termin um 15 Uhr" und für keine einzige Quelldatei: Bei rund vier Zeichen
+     * je Token ist bei 400 Zeichen Schluss, das JSON bricht mitten im Inhalt ab, und
+     * `parseCall` gibt `null` zurück. Auf dem Gerät sah das aus wie „Das habe ich nicht als
+     * Befehl verstanden" — bei einem Aufruf, den das Modell völlig richtig begonnen hatte.
+     *
+     * Die Grenze pauschal hochzusetzen wäre falsch herum: Ein Modell füllt den Platz, den
+     * es bekommt, und bei zwölf Token je Sekunde ist jede unnötige Marke eine Sekunde
+     * Wartezeit. Deshalb entscheidet der Parameter, nicht der Aufrufer.
+     */
+    val langerInhalt: Boolean = false,
 )
 
 @Serializable
@@ -146,6 +160,7 @@ class ToolRegistry(tools: List<Tool>) {
                 }
                 appendLine(" \"}}\"")
             }
+            var brauchtText = false
             for (spec in specs) {
                 for (parameter in spec.parameters) {
                     val rule = argumentRule(spec.name, parameter)
@@ -157,19 +172,88 @@ class ToolRegistry(tools: List<Tool>) {
 
                             parameter.type == ParameterType.INTEGER -> "\"\\\"\" [0-9]+ \"\\\"\""
                             parameter.type == ParameterType.BOOLEAN -> "\"\\\"true\\\"\" | \"\\\"false\\\"\""
-                            else -> "\"\\\"\" [^\"]* \"\\\"\""
+                            else -> {
+                                brauchtText = true
+                                TEXT_REGEL
+                            }
                         }
                     )
                 }
             }
+            if (brauchtText) append(TEXT_DEFINITION)
         }
     }
 
     private fun argumentRule(toolName: String, parameter: ToolParameter): String =
         regelname("arg-$toolName-${parameter.name}")
 
+    /**
+     * Wie lang ein Werkzeugaufruf mit diesen Werkzeugen werden darf.
+     *
+     * Siehe [ToolParameter.langerInhalt]. Kurze Zusammenstellungen behalten die enge Grenze;
+     * sobald eine ganze Datei hineinpassen muss, gilt die weite. Dass die Grammatik den
+     * Aufruf ohnehin nach `}}` beendet, macht die weite Grenze billig: Sie wird nur
+     * ausgeschöpft, wenn wirklich so viel Inhalt kommt.
+     */
+    fun maxAntwortToken(): Int =
+        if (specs.any { spec -> spec.parameters.any { it.langerInhalt } }) LANGE_GRENZE
+        else KURZE_GRENZE
+
     companion object {
         private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+
+        /** Reicht für „Termin, 15 Uhr, morgen" und für jede Rückfrage. */
+        const val KURZE_GRENZE = 128
+
+        /**
+         * Reicht für eine Quelldatei von rund sechstausend Zeichen.
+         *
+         * Nicht größer: Eine `MainActivity.kt` aus der Vorlage hat 1200 Zeichen, und was ein
+         * Modell darüber hinaus schreibt, ist auf einem Telefon eher eine Endlosschleife als
+         * ein Werk. Bei zwölf Token je Sekunde wären 1536 Token schon zwei Minuten.
+         */
+        const val LANGE_GRENZE = 1_536
+
+        /**
+         * Die Regel für eine Zeichenkette — und der Grund, warum die IDE keinen Code schreiben
+         * konnte.
+         *
+         * **Hier stand `"\"" [^"]* "\""`.** Also: ein Anführungszeichen, beliebig viele
+         * Zeichen die *kein* Anführungszeichen sind, ein Anführungszeichen. Das verbietet dem
+         * Modell buchstabengenau, ein `"` in den Inhalt zu schreiben — und damit jedes
+         * `println("hallo")`, jedes `android:name="..."`, jedes Python mit einer Zeichenkette
+         * darin. Die erzwungene Grammatik ließ das Zeichen schlicht nicht durch.
+         *
+         * Und Zeilenumbrüche gingen zwar durch, ergaben aber ungültiges JSON: Ein roher
+         * Umbruch innerhalb einer JSON-Zeichenkette ist nicht erlaubt, also scheiterte danach
+         * `parseCall`. Mehrzeilige Dateien waren damit ebenso unmöglich wie Anführungszeichen.
+         *
+         * Beides behebt dieselbe Regel: eine **echte** JSON-Zeichenkette. Sie lässt normale
+         * Zeichen durch, verlangt für `"` und `\` die üblichen Fluchtfolgen und verbietet rohe
+         * Steuerzeichen — womit der Umbruch als `\n` geschrieben werden **muss**. Weil die
+         * Grammatik das erzwingt, kann das Modell es nicht falsch machen.
+         */
+        const val TEXT_REGEL = "text"
+
+        /**
+         * Einmal definiert statt je Parameter.
+         *
+         * Nebeneffekt, der hier zählt: Die Grammatik ist Teil des Prompts. Elf Werkzeuge mit
+         * je eigener, identischer Zeichenkettenregel wären elf Zeilen für dieselbe Aussage —
+         * und jede kostet Kontext und Zeit vor dem ersten Wort.
+         */
+        val TEXT_DEFINITION: String = buildString {
+            appendLine("$TEXT_REGEL ::= \"\\\"\" text-zeichen* \"\\\"\"")
+            // Ausgeschlossen sind Anführungszeichen, der Rückstrich und die drei
+            // Steuerzeichen, die ein Modell tatsächlich schreibt: Umbruch, Wagenrücklauf,
+            // Tabulator. Roh sind sie in JSON verboten — also muss ein mehrzeiliger Inhalt
+            // seine Umbrüche als `\n` schreiben, und die Grammatik lässt ihm keine Wahl.
+            appendLine(
+                "text-zeichen ::= [^\"\\\\\\n\\r\\t] | " +
+                    "\"\\\\\" [\"\\\\/bfnrt] | " +
+                    "\"\\\\u\" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]"
+            )
+        }
 
         /**
          * Macht aus einem beliebigen Namen einen gültigen GBNF-Regelnamen.

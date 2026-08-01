@@ -39,4 +39,9 @@ dependencies {
     testImplementation(libs.kotlin.test)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    // Nur zum Testen: Ob die erzeugte Grammatik gültig ist, kann kein Kotlin-Test
+    // beantworten — das entscheidet der Parser in llama.cpp. Der Wächter dafür braucht
+    // beides, den Erzeuger aus core/tools und den laufenden Server hier. Keine
+    // Ringabhängigkeit: core/tools kennt core/inference nicht.
+    testImplementation(project(":core:tools"))
 }

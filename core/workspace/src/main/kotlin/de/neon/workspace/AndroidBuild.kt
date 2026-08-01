@@ -109,28 +109,61 @@ class AndroidBuild(
             )
         }
 
-        fun abbruch(schritt: String, ergebnis: CommandResult) = BuildResult(
-            gelungen = false,
-            apk = null,
-            bericht = ergebnis.describe(),
-            schritt = schritt,
-            dauerMillis = System.currentTimeMillis() - begonnen,
-        )
+        fun abbruch(schritt: String, ergebnis: CommandResult): BuildResult {
+            // **Der Fehlschlag gehört ins Protokoll, nicht nur in die Sprechblase.** Vorher
+            // gab diese Stelle nur ein Ergebnisobjekt zurück; was aapt2 oder der Compiler
+            // gesagt hatten, stand nirgends. Bei einem Bauvorgang aus fünf fremden Programmen
+            // ist deren Ausgabe aber das Einzige, woraus sich der Fehler ableiten lässt.
+            log(
+                "Bau gescheitert bei „$schritt\" nach ${System.currentTimeMillis() - begonnen} ms, " +
+                    "Rückgabewert ${ergebnis.exitCode}" +
+                    (if (ergebnis.timedOut) ", Zeitüberschreitung" else "") +
+                    ": " + ergebnis.describe().gekuerzt(AUSGABE_IM_PROTOKOLL)
+            )
+            return BuildResult(
+                gelungen = false,
+                apk = null,
+                bericht = ergebnis.describe(),
+                schritt = schritt,
+                dauerMillis = System.currentTimeMillis() - begonnen,
+            )
+        }
+
+        /**
+         * Führt einen Schritt aus und protokolliert ihn mit Dauer und Rückgabewert.
+         *
+         * Die Dauer ist keine Zierde: Der Kotlin-Compiler ist der langsamste Teil und
+         * beansprucht auf dem Telefon den Großteil der Minute. Wer wissen will, ob ein Bau
+         * hängt oder arbeitet, braucht die Verteilung über die fünf Schritte — und wer sie
+         * beschleunigen will, erst recht.
+         */
+        fun schritt(name: String, fuehreAus: () -> CommandResult): CommandResult {
+            val start = System.currentTimeMillis()
+            val ergebnis = fuehreAus()
+            log(
+                "Bauschritt $name: ${if (ergebnis.gelungen) "gelungen" else "gescheitert"} " +
+                    "nach ${System.currentTimeMillis() - start} ms, " +
+                    "Rückgabewert ${ergebnis.exitCode}"
+            )
+            return ergebnis
+        }
+
+        log("Bau beginnt — Paket $paketname, Projekt ${wurzel.absolutePath}")
 
         // 1 und 2: Ressourcen.
         val res = File(wurzel, "res")
         val kompilierteRes = File(bau, "res.zip")
         if (res.isDirectory) {
-            log("Ressourcen übersetzen")
-            val schritt = runner.run(
-                listOf(tools.aapt2.absolutePath, "compile", "--dir", res.absolutePath,
-                    "-o", kompilierteRes.absolutePath),
-                wurzel, timeoutMillis = timeoutMillis,
-            )
-            if (!schritt.gelungen) return abbruch("aapt2 compile", schritt)
+            val kompilieren = schritt("aapt2 compile") {
+                runner.run(
+                    listOf(tools.aapt2.absolutePath, "compile", "--dir", res.absolutePath,
+                        "-o", kompilierteRes.absolutePath),
+                    wurzel, timeoutMillis = timeoutMillis,
+                )
+            }
+            if (!kompilieren.gelungen) return abbruch("aapt2 compile", kompilieren)
         }
 
-        log("Ressourcen verknüpfen")
         val basis = File(bau, "basis.apk")
         val gen = File(bau, "gen").apply { mkdirs() }
         val linkBefehl = buildList {
@@ -146,11 +179,12 @@ class AndroidBuild(
             add("--auto-add-overlay")
             if (kompilierteRes.isFile) add(kompilierteRes.absolutePath)
         }
-        val link = runner.run(linkBefehl, wurzel, timeoutMillis = timeoutMillis)
+        val link = schritt("aapt2 link") {
+            runner.run(linkBefehl, wurzel, timeoutMillis = timeoutMillis)
+        }
         if (!link.gelungen) return abbruch("aapt2 link", link)
 
         // 3: Kotlin.
-        log("Quelltext übersetzen — das dauert auf dem Telefon am längsten")
         val src = File(wurzel, "src")
         if (!src.isDirectory) {
             return BuildResult(
@@ -163,7 +197,7 @@ class AndroidBuild(
         val klassenpfad = listOf(tools.androidJar, tools.kotlinStdlib, tools.annotations)
             .joinToString(File.pathSeparator) { it.absolutePath }
 
-        val kotlin = java.run(
+        val kotlin = schritt("Kotlin-Compiler") { java.run(
             dexJar = tools.kotlinc,
             mainClass = KOTLINC_MAIN,
             args = buildList {
@@ -182,11 +216,10 @@ class AndroidBuild(
             },
             workingDir = wurzel,
             timeoutMillis = timeoutMillis,
-        )
+        ) }
         if (!kotlin.gelungen) return abbruch("Kotlin-Compiler", kotlin)
 
         // 4: Dex.
-        log("in Dex umwandeln")
         val dex = File(bau, "dex").apply { mkdirs() }
         val klassenDateien = klassen.walkTopDown().filter { it.extension == "class" }
             .map { it.absolutePath }.toList()
@@ -199,7 +232,7 @@ class AndroidBuild(
             )
         }
 
-        val d8Ergebnis = java.run(
+        val d8Ergebnis = schritt("d8") { java.run(
             dexJar = tools.d8,
             mainClass = D8_MAIN,
             args = buildList {
@@ -214,11 +247,10 @@ class AndroidBuild(
             },
             workingDir = wurzel,
             timeoutMillis = timeoutMillis,
-        )
+        ) }
         if (!d8Ergebnis.gelungen) return abbruch("d8", d8Ergebnis)
 
         // Die Dex-Dateien in die APK legen.
-        log("APK zusammensetzen")
         val unsigniert = File(bau, "unsigniert.apk")
         basis.copyTo(unsigniert, overwrite = true)
         val dexDateien = dex.listFiles { f -> f.extension == "dex" }?.sortedBy { it.name }.orEmpty()
@@ -233,9 +265,8 @@ class AndroidBuild(
         ApkAssembler.fuegeEin(unsigniert, dexDateien)
 
         // 5: Signieren.
-        log("signieren")
         val fertig = File(bau, "$paketname.apk")
-        val signieren = java.run(
+        val signieren = schritt("apksigner") { java.run(
             dexJar = tools.apksigner,
             mainClass = APKSIGNER_MAIN,
             args = listOf(
@@ -250,11 +281,14 @@ class AndroidBuild(
             ),
             workingDir = wurzel,
             timeoutMillis = timeoutMillis,
-        )
+        ) }
         if (!signieren.gelungen) return abbruch("apksigner", signieren)
 
         val dauer = System.currentTimeMillis() - begonnen
-        log("fertig nach ${dauer / 1000} s: ${fertig.name}, ${fertig.length() / 1024} KB")
+        log(
+            "Bau fertig nach ${dauer} ms: ${fertig.name}, ${fertig.length() / 1024} KB, " +
+                "${dexDateien.size} Dex-Datei(en), ${klassenDateien.size} Klassen"
+        )
         return BuildResult(
             gelungen = true,
             apk = fertig,
@@ -266,6 +300,16 @@ class AndroidBuild(
 
     companion object {
         const val BAU_VERZEICHNIS = "build"
+
+        /**
+         * Wie viel Werkzeugausgabe bei einem Fehlschlag ins Protokoll geht.
+         *
+         * Großzügig, weil hier der Nutzen liegt: `error: unresolved reference: Buton` in
+         * Zeile 12 ist das, woraus sich der Fehler beheben lässt. Der Kotlin-Compiler kann
+         * allerdings hundert Zeilen Folgefehler hinterherschicken, und die gehören nicht
+         * alle in eine Protokolldatei, die sich jemand ansehen soll.
+         */
+        const val AUSGABE_IM_PROTOKOLL = 1_500
 
         /**
          * Dieselben Grenzen wie bei Neon selbst.

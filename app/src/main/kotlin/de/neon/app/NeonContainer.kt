@@ -330,6 +330,10 @@ class NeonContainer(context: Context) {
         val laufzeit = PythonRuntime(
             nativeDir = File(appContext.applicationInfo.nativeLibraryDir),
             dataDir = appContext.filesDir,
+            // Damit ein Python-Lauf eine Spur hinterlässt. Vorher war von einem Skript, das
+            // still scheiterte, im Protokoll nichts zu sehen — nur die Sprechblase sagte
+            // etwas, und die ist nach dem nächsten Satz weg.
+            log = { meldung -> NeonLog.i(TAG_IDE, meldung) },
         )
         runCatching {
             val entpackt = laufzeit.einrichten(
@@ -440,7 +444,7 @@ class NeonContainer(context: Context) {
             tools = werkzeuge,
             runner = ProcessCommandRunner(),
             java = DalvikRunner(cacheDir = File(appContext.cacheDir, "dalvik")),
-            log = { meldung -> NeonLog.i("NeonBuild", meldung) },
+            log = { meldung -> NeonLog.i(TAG_IDE, meldung) },
         )
         NeonLog.i(TAG, "Bau-Kette bereit")
     }
@@ -454,8 +458,17 @@ class NeonContainer(context: Context) {
         deviceState = { deviceStateProvider.current() },
         actionExecutor = { actionExecutor.execute(it) },
         outcomeStore = outcomeStore,
-        tools = tools,
-        codeTools = codeTools,
+        // **Funktionen und keine Werte.** Hier stand `codeTools = codeTools`, und das war
+        // der Fehler, an dem die Projekterstellung scheiterte: Der Getter wurde genau einmal
+        // ausgewertet, beim Bau des Containers — und zu diesem Zeitpunkt packten Python und
+        // Bau-Kette im Hintergrund noch ihre fünfzig Megabyte aus. Die Zusammenstellung
+        // enthielt vier Datei-Werkzeuge und blieb für die ganze Laufzeit dabei.
+        //
+        // `app-anlegen`, `app-bauen` und `python` standen damit weder im Prompt noch in der
+        // Grammatik. Das Modell konnte sie nicht wählen, weil es sie nicht gab. Im Protokoll
+        // stand „Bau-Kette bereit" — bereit war sie, angeboten wurde sie nie.
+        tools = { tools },
+        codeTools = { codeTools },
         memory = { query, limit ->
             runCatching { memory.recall(query, limit) }.getOrDefault(emptyList())
         },
@@ -713,6 +726,16 @@ class NeonContainer(context: Context) {
 
     private companion object {
         const val TAG = "NeonContainer"
+
+        /**
+         * Ein Kennzeichner für die ganze Entwicklungsumgebung.
+         *
+         * Bau-Kette und Python getrennt zu kennzeichnen wäre ordentlicher und beim Suchen
+         * unpraktisch: Wer wissen will, was Neon beim Programmieren getan hat, will beides
+         * in einer Reihenfolge sehen — welche Datei geschrieben wurde, was Python dazu
+         * sagte, an welchem Bauschritt es hakte. Ein Filter auf `NeonIDE` liefert genau das.
+         */
+        const val TAG_IDE = "NeonIDE"
         const val SCHLUESSEL_KONTEXT = "kontextfenster"
     }
 

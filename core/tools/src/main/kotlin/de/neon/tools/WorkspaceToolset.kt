@@ -48,6 +48,9 @@ object WorkspaceToolset {
             add(AppAnlegen(workspace))
             add(AppBauen(workspace, build) { paketnameAus(workspace) })
         }
+        // Zuletzt, damit es in der Beschreibung unter den Handlungen steht: Erst was Neon
+        // tun kann, dann der Ausweg, wenn unklar ist, welche davon gemeint ist.
+        add(Rueckfrage())
     }
 
     /**
@@ -80,7 +83,10 @@ private class DateiSchreiben(private val tools: WorkspaceTools) : Tool {
         description = "Legt eine Datei an oder überschreibt sie vollständig.",
         parameters = listOf(
             ToolParameter("pfad", ParameterType.STRING, "Pfad im Projekt"),
-            ToolParameter("inhalt", ParameterType.STRING, "Der vollständige neue Inhalt"),
+            ToolParameter(
+                "inhalt", ParameterType.STRING, "Der vollständige neue Inhalt",
+                langerInhalt = true,
+            ),
         ),
     )
 
@@ -103,8 +109,14 @@ private class DateiAendern(private val tools: WorkspaceTools) : Tool {
             "in der Datei stehen und darf nur einmal vorkommen — sonst passiert nichts.",
         parameters = listOf(
             ToolParameter("pfad", ParameterType.STRING, "Pfad im Projekt"),
-            ToolParameter("alt", ParameterType.STRING, "Der zu ersetzende Text, wörtlich"),
-            ToolParameter("neu", ParameterType.STRING, "Was stattdessen dort stehen soll"),
+            ToolParameter(
+                "alt", ParameterType.STRING, "Der zu ersetzende Text, wörtlich",
+                langerInhalt = true,
+            ),
+            ToolParameter(
+                "neu", ParameterType.STRING, "Was stattdessen dort stehen soll",
+                langerInhalt = true,
+            ),
         ),
     )
 
@@ -143,7 +155,10 @@ private class PythonAusfuehren(
         description = "Führt Python-Quelltext aus und gibt zurück, was er ausgibt. " +
             "Für Rechnungen, Datenauswertung und alles, was man ausprobieren muss.",
         parameters = listOf(
-            ToolParameter("quelltext", ParameterType.STRING, "Der auszuführende Python-Code"),
+            ToolParameter(
+                "quelltext", ParameterType.STRING, "Der auszuführende Python-Code",
+                langerInhalt = true,
+            ),
         ),
     )
 

@@ -24,6 +24,14 @@ class PythonRuntime(
     /** Das Datenverzeichnis der App. Hierhin kommt die Standardbibliothek. */
     private val dataDir: File,
     private val runner: CommandRunner = ProcessCommandRunner(),
+    /**
+     * Wohin ein Lauf gemeldet wird.
+     *
+     * Die Python-Umgebung hat auf dem Gerät geschwiegen: Ob ein Skript lief, wie lange es
+     * brauchte und mit welchem Rückgabewert es endete, stand nirgends. Bei einem eigenen
+     * Prozess, der still scheitern kann, ist das die einzige Spur.
+     */
+    private val log: (String) -> Unit = {},
 ) {
 
     /** Wo die Standardbibliothek nach dem Entpacken liegt. */
@@ -110,12 +118,26 @@ class PythonRuntime(
             ?: return fehlt("„$pfad\" liegt außerhalb des Projekts.")
         if (!skript.isFile) return fehlt("Die Datei $pfad gibt es nicht.")
 
-        return runner.run(
+        val begonnen = System.currentTimeMillis()
+        val ergebnis = runner.run(
             command = listOf(launcher.absolutePath, skript.absolutePath),
             workingDir = workspace.wurzel,
             env = umgebung(),
             timeoutMillis = timeoutMillis,
         )
+        // Die Ausgabelänge statt der Ausgabe: Ein Skript, das zehntausend Zeilen druckt,
+        // gehört nicht in die Protokolldatei — aber dass es das tat, gehört hinein. Der
+        // Rückgabewert unterscheidet den Absturz vom leeren Ergebnis, und die Dauer den
+        // Absturz von der Zeitüberschreitung.
+        log(
+            "Python ${skript.name}: Rückgabewert ${ergebnis.exitCode} nach " +
+                "${System.currentTimeMillis() - begonnen} ms, " +
+                "${ergebnis.stdout.length} Zeichen Ausgabe" +
+                (if (ergebnis.timedOut) ", Zeitüberschreitung" else "") +
+                (if (ergebnis.stderr.isNotBlank())
+                    " · Fehler: " + ergebnis.stderr.gekuerzt(FEHLER_IM_PROTOKOLL) else "")
+        )
+        return ergebnis
     }
 
     /**
@@ -182,6 +204,14 @@ class PythonRuntime(
 
     companion object {
         const val LAUNCHER_NAME = "libpython-launcher.so"
+
+        /**
+         * Wie viel einer Python-Fehlermeldung ins Protokoll geht.
+         *
+         * Ein Traceback ist selten länger, und er ist genau das, was die Frage beantwortet,
+         * warum ein Skript nichts ausgegeben hat.
+         */
+        const val FEHLER_IM_PROTOKOLL = 800
 
         /** Der Name des Assets, wie ihn `scripts/fetch-python.sh` erzeugt. */
         const val STDLIB_ASSET = "python-stdlib.zip"

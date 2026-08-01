@@ -2,6 +2,12 @@ package de.neon.inference
 
 import de.neon.router.Capability
 import de.neon.router.ModelRole
+import de.neon.tools.ParameterType
+import de.neon.tools.Tool
+import de.neon.tools.ToolParameter
+import de.neon.tools.ToolRegistry
+import de.neon.tools.ToolResult
+import de.neon.tools.ToolSpec
 import de.neon.router.ModelSpec
 import de.neon.router.RouterLlmProtocol
 import de.neon.router.TaskCategory
@@ -275,6 +281,103 @@ class LlamaServerIntegrationTest {
             assertTrue(vector.any { it != 0f }, "Nullvektor zurückbekommen")
             println("Einbettung mit ${vector.size} Dimensionen")
         }
+    }
+
+    /**
+     * llama.cpp muss die Grammatik annehmen, die Neon erzeugt — und Quelltext durchlassen.
+     *
+     * **Zwei Fehler, die genau hier hätten auffallen müssen.** Der erste war ein Parameter
+     * namens `tage_ab_heute`: Der Unterstrich beendet einen GBNF-Regelnamen, und damit war
+     * nicht eine Regel kaputt, sondern die ganze Grammatik. Jeder Werkzeugaufruf endete mit
+     * HTTP 400, gleich um welches Werkzeug es ging.
+     *
+     * Der zweite war die Zeichenkettenregel `"\"" [^"]* "\""`. Sie ist gültig — llama.cpp
+     * nimmt sie widerspruchslos an — und verbietet dem Modell trotzdem jedes
+     * Anführungszeichen im Inhalt. Damit ließ sich keine Zeile Kotlin und kein Python
+     * schreiben. Der Fehler war also nicht „Grammatik ungültig", sondern „Grammatik erlaubt
+     * das Nötige nicht", und ein Test auf HTTP 200 allein hätte ihn durchgelassen.
+     *
+     * Deshalb prüft dieser Test beides: dass der Server die Grammatik annimmt **und** dass
+     * das Ergebnis Fluchtfolgen enthalten darf. Kein Kotlin-Test kann das beantworten; das
+     * entscheidet der Parser in llama.cpp.
+     */
+    @Test
+    fun `llama-cpp nimmt die erzeugte Grammatik an und laesst Fluchtfolgen zu`() = runBlocking {
+        val url = baseUrl ?: return@runBlocking
+        val client = LlamaServerClient(url)
+
+        val registry = ToolRegistry(
+            listOf(
+                object : Tool {
+                    override val spec = ToolSpec(
+                        name = "datei-schreiben",
+                        description = "Legt eine Datei an.",
+                        parameters = listOf(
+                            ToolParameter("pfad", ParameterType.STRING, "Pfad"),
+                            ToolParameter(
+                                "inhalt", ParameterType.STRING, "Inhalt", langerInhalt = true,
+                            ),
+                        ),
+                    )
+
+                    override suspend fun execute(arguments: Map<String, String>) =
+                        ToolResult.Ok("ok")
+                },
+            )
+        )
+
+        // Eine Engine für beide Abschnitte. Eine zweite hätte kein geladenes Modell und
+        // lieferte einen Fehlschlag statt Token — was hier wie eine kaputte Grammatik
+        // aussähe und keine wäre.
+        val engine = engine() ?: return@runBlocking
+        assertTrue(engine.load(testModel, modelFile))
+
+        val chunks = withTimeout(TIMEOUT_MILLIS) {
+            engine.generate(
+                GenerationRequest(
+                    messages = listOf(
+                        ChatMessage(Role.USER, "Lege src/Main.kt an."),
+                    ),
+                    maxTokens = registry.maxAntwortToken(),
+                    temperature = 0f,
+                    grammar = registry.grammar(),
+                )
+            ).toList()
+        }
+
+        val gescheitert = chunks.filterIsInstance<GenerationChunk.Failed>().firstOrNull()
+        assertTrue(
+            gescheitert == null,
+            "llama.cpp hat die Grammatik abgelehnt: ${gescheitert?.reason} " +
+                "${gescheitert?.detail}\n\n${registry.grammar()}",
+        )
+
+        val roh = chunks.filterIsInstance<GenerationChunk.Token>().joinToString("") { it.text }
+        val call = ToolRegistry.parseCall(roh)
+        assertNotNull(call, "keine lesbare Ausgabe: $roh")
+        assertEquals("datei-schreiben", call.name)
+
+        // Und die zweite Hälfte: eine Grammatik, in der **nur** Fluchtfolgen ableitbar sind.
+        // Kommt hier etwas heraus, lässt die Regel sie zu. Mit der alten Regel wäre schon
+        // das Anführungszeichen unmöglich gewesen.
+        val nurEscapes = withTimeout(TIMEOUT_MILLIS) {
+            engine.generate(
+                GenerationRequest(
+                    messages = listOf(ChatMessage(Role.USER, "Gib eine Zeichenkette aus.")),
+                    maxTokens = 32,
+                    temperature = 0f,
+                    grammar = "root ::= \"\\\"\" escape escape \"\\\"\"\n" +
+                        "escape ::= \"\\\\\" [\"\\\\/bfnrt]\n",
+                )
+            ).toList()
+        }
+        val escapeText = nurEscapes.filterIsInstance<GenerationChunk.Token>()
+            .joinToString("") { it.text }
+        assertTrue(
+            escapeText.length >= 4 && escapeText.startsWith("\""),
+            "Fluchtfolgen sind nicht ableitbar: $escapeText",
+        )
+        println("Fluchtfolgen erzeugt: $escapeText")
     }
 
     private fun freePort(): Int = ServerSocket(0).use { it.localPort }

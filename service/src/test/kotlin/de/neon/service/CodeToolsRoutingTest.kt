@@ -134,8 +134,8 @@ class CodeToolsRoutingTest {
             actionExecutor = { null },
             outcomeStore = InMemoryRouteOutcomeStore(),
             clock = { 0L },
-            tools = geraeteWerkzeuge,
-            codeTools = codeWerkzeuge,
+            tools = { geraeteWerkzeuge },
+            codeTools = { codeWerkzeuge },
         )
     }
 
@@ -157,6 +157,78 @@ class CodeToolsRoutingTest {
         assertNotNull(report)
         assertEquals(mapOf("wert" to "6*7"), werkzeug.aufgerufen)
         assertEquals(listOf("42"), tts.spoken)
+    }
+
+    /**
+     * Werkzeuge, die erst nach dem Aufbau fertig werden, müssen trotzdem ankommen.
+     *
+     * **Der Fehler, den das festhält, hat die IDE lahmgelegt.** Der Container reichte die
+     * Zusammenstellung als Wert herein. Ausgewertet wurde sie genau einmal, beim Bauen — und
+     * zu diesem Zeitpunkt packten Python und die Bau-Kette im Hintergrund noch fünfzig
+     * Megabyte aus. Die Zusammenstellung enthielt vier Datei-Werkzeuge und blieb für die
+     * ganze Laufzeit des Prozesses dabei.
+     *
+     * Die Folge war kein Fehler, sondern Stille: `app-anlegen`, `app-bauen` und `python`
+     * standen weder im Prompt noch in der Grammatik. Das Modell konnte sie nicht wählen,
+     * weil es sie für nicht vorhanden hielt. Im Protokoll stand „Bau-Kette bereit" — bereit
+     * war sie, angeboten wurde sie nie.
+     *
+     * Deshalb kommt die Zusammenstellung hier als Funktion, und dieser Test liefert beim
+     * Aufbau ausdrücklich `null`.
+     */
+    @Test
+    fun `Werkzeuge, die erst spaeter fertig werden, sind trotzdem benutzbar`() = runTest {
+        val werkzeug = NotierendesWerkzeug("app-anlegen", "Projekt angelegt.")
+        val engine = FakeEngine(
+            """{"werkzeug":"app-anlegen","argumente":{"wert":"de.neon.zaehler"}}"""
+        )
+        val tts = FakeTts()
+
+        // Beim Aufbau ist noch nichts da — genau wie auf dem Gerät, wo das Auspacken der
+        // Bau-Werkzeuge im Hintergrund läuft, während die App schon Fragen annimmt.
+        var spaeter: ToolRegistry? = null
+
+        val lifecycle = ModelLifecycleManager(
+            engine = engine,
+            resolver = ModelFileResolver { File("/dev/null") },
+            memoryBudgetBytes = { 16L * 1024 * 1024 * 1024 },
+        )
+        val orchestrator = ConversationOrchestrator(
+            router = Router(
+                registry,
+                SelectionPolicy(registry),
+                routerLlm = RouterLlm {
+                    RouteAnalysis(
+                        category = TaskCategory.CODE,
+                        complexity = 2,
+                        confidence = 0.9,
+                        source = AnalysisSource.ROUTER_LLM,
+                    )
+                },
+            ),
+            asr = FakeAsr("leg mir eine App an"),
+            tts = tts,
+            lifecycle = lifecycle,
+            engine = engine,
+            deviceState = { DeviceState.unknown() },
+            actionExecutor = { null },
+            outcomeStore = InMemoryRouteOutcomeStore(),
+            clock = { 0L },
+            codeTools = { spaeter },
+        )
+
+        // Und jetzt ist das Auspacken durch.
+        spaeter = ToolRegistry(listOf(werkzeug))
+
+        val report = orchestrator.handleUtterance(samples)
+
+        assertNotNull(report)
+        assertEquals(
+            mapOf("wert" to "de.neon.zaehler"),
+            werkzeug.aufgerufen,
+            "das Werkzeug wurde nicht angeboten — die Zusammenstellung ist wieder eingefroren",
+        )
+        assertEquals(listOf("Projekt angelegt."), tts.spoken)
     }
 
     @Test
