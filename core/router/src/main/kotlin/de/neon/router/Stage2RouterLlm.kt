@@ -47,13 +47,35 @@ object RouterLlmProtocol {
         appendLine("- PERSOENLICH: bezieht sich auf gespeichertes Wissen über den Nutzer")
         appendLine("- WEB_AKTUELL: braucht tagesaktuelle Informationen aus dem Netz")
         appendLine()
+        appendLine()
+        appendLine("Antworte in genau einer Zeile, in dieser Form:")
+        appendLine("KATEGORIE komplexitaet web bild privat")
+        appendLine()
         appendLine("komplexitaet: 1 = trivial, 3 = normale Frage, 5 = verlangt echtes Nachdenken.")
-        appendLine("privat: true, wenn Kontakte, Nachrichten, Gesundheit, Finanzen oder Standort vorkommen.")
+        appendLine("web, bild, privat: j oder n.")
+        appendLine("privat ist j, wenn Kontakte, Nachrichten, Gesundheit, Finanzen oder Standort vorkommen.")
+        appendLine()
+        appendLine("Beispiel: WISSENSFRAGE 2 n n n")
     }
 
     /**
-     * GBNF-Grammatik für llama.cpp. Erzwingt gültiges JSON mit genau diesen Feldern —
-     * damit kann auch ein kleines Modell nicht aus der Form fallen.
+     * GBNF-Grammatik für llama.cpp. Erzwingt genau eine Zeile der Form
+     * `KATEGORIE komplexitaet web bild privat`.
+     *
+     * **Hier stand JSON, und das war teuer.** Die Antwort lautete
+     * `{"kategorie":"CODE","komplexitaet":3,"braucht_web":false,…}` — rund 45 Token, von denen
+     * die Grammatik über dreißig ohnehin erzwang. Das half nichts: Ein erzwungenes Token
+     * kostet denselben vollständigen Rechendurchgang durch das Modell wie ein frei gewähltes.
+     * llama.cpp überspringt festgelegte Fortsetzungen nicht.
+     *
+     * Auf dem Gerät waren das gemessene 45 bis 50 Ausgabe-Token je Einordnung, bei 15 Token
+     * je Sekunde auf dem 4-B-Modell also **rund drei Sekunden** — für eine Auskunft, die aus
+     * einer Kategorie, einer Ziffer und drei Ja-Nein-Angaben besteht. Die kompakte Form
+     * braucht sechs bis acht Token.
+     *
+     * Die Kategorie bleibt ausgeschrieben. Ein Buchstabenkürzel wäre noch kürzer, verlangte
+     * dem Modell aber eine Übersetzung ab, die es schlechter kann als das Einordnen selbst —
+     * gespart wären zwei Token, bezahlt mit Treffgenauigkeit.
      *
      * **Jede Regel muss in einer Zeile stehen.** Der GBNF-Parser kennt keine Fortsetzung
      * über Zeilenumbrüche hinweg; eine umgebrochene Regel führt nicht etwa zu einer
@@ -62,18 +84,10 @@ object RouterLlmProtocol {
      * zeigt.
      */
     val grammar: String = buildString {
-        append("root ::= \"{\"")
-        append(" ws \"\\\"kategorie\\\"\" ws \":\" ws kategorie ws \",\"")
-        append(" ws \"\\\"komplexitaet\\\"\" ws \":\" ws komplexitaet ws \",\"")
-        append(" ws \"\\\"braucht_web\\\"\" ws \":\" ws bool ws \",\"")
-        append(" ws \"\\\"braucht_bild\\\"\" ws \":\" ws bool ws \",\"")
-        append(" ws \"\\\"privat\\\"\" ws \":\" ws bool ws")
-        appendLine(" \"}\"")
+        appendLine("root ::= kategorie \" \" [1-5] \" \" ja-nein \" \" ja-nein \" \" ja-nein")
         append("kategorie ::= ")
-        appendLine(routableCategories.joinToString(" | ") { "\"\\\"${it.name}\\\"\"" })
-        appendLine("komplexitaet ::= [1-5]")
-        appendLine("bool ::= \"true\" | \"false\"")
-        appendLine("ws ::= [ \\t\\n]*")
+        appendLine(routableCategories.joinToString(" | ") { "\"${it.name}\"" })
+        appendLine("ja-nein ::= \"j\" | \"n\"")
     }
 
     fun userPrompt(utterance: Utterance): String = "Äußerung: ${utterance.text}"
@@ -84,7 +98,53 @@ object RouterLlmProtocol {
      * Auch bei erzwungener Grammatik wird defensiv geparst: Das Modell könnte über eine
      * andere Laufzeit ohne Grammatikunterstützung laufen.
      */
-    fun parse(raw: String): RouteAnalysis? {
+    fun parse(raw: String): RouteAnalysis? = parseKompakt(raw) ?: parseJson(raw)
+
+    /**
+     * Die kurze Form: `KATEGORIE komplexitaet web bild privat`.
+     *
+     * Nachsichtig bei den Trennzeichen und bei der Groß- und Kleinschreibung. Die Grammatik
+     * lässt zwar nur eine Form zu, aber `parse` ist ausdrücklich auch für den Fall gebaut,
+     * dass keine Grammatik wirkt — und dann ist ein zusätzliches Leerzeichen kein Grund,
+     * eine sonst brauchbare Einordnung wegzuwerfen.
+     */
+    private fun parseKompakt(raw: String): RouteAnalysis? {
+        val teile = raw.trim().split(Regex("\\s+"))
+        if (teile.size < 5) return null
+
+        val category = runCatching { TaskCategory.valueOf(teile[0].uppercase()) }.getOrNull()
+            ?: return null
+        if (category == TaskCategory.UNBEKANNT) return null
+        val komplexitaet = teile[1].toIntOrNull() ?: return null
+
+        fun jaNein(wert: String): Boolean? = when (wert.lowercase()) {
+            "j", "ja", "true" -> true
+            "n", "nein", "false" -> false
+            else -> null
+        }
+
+        return RouteAnalysis(
+            category = category,
+            complexity = komplexitaet.coerceIn(
+                RouteAnalysis.MIN_COMPLEXITY,
+                RouteAnalysis.MAX_COMPLEXITY,
+            ),
+            needsWeb = jaNein(teile[2]) ?: return null,
+            needsVision = jaNein(teile[3]) ?: return null,
+            isPrivate = jaNein(teile[4]) ?: return null,
+            confidence = ROUTER_LLM_CONFIDENCE,
+            source = AnalysisSource.ROUTER_LLM,
+        )
+    }
+
+    /**
+     * Die alte JSON-Form, weiterhin lesbar.
+     *
+     * Kostet nichts, solange sie nicht vorkommt, und rettet den Fall, dass ein Modell ohne
+     * wirksame Grammatik antwortet — kleine Modelle haben JSON millionenfach gesehen und
+     * fallen im Zweifel darauf zurück.
+     */
+    private fun parseJson(raw: String): RouteAnalysis? {
         val payload = extractJsonObject(raw) ?: return null
         val decoded = runCatching { json.decodeFromString<Response>(payload) }.getOrNull() ?: return null
         val category = runCatching { TaskCategory.valueOf(decoded.category.uppercase()) }

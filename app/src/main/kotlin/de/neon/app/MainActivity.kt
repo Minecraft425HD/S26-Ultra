@@ -38,6 +38,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -717,16 +718,34 @@ private fun NeonScreen(
                         )
                         Spacer(Modifier.height(8.dp))
 
-                        var kontext by remember(contextSize) { mutableFloatStateOf(contextSize.toFloat()) }
+                        // **Der Regler rastet auf den Stufen, die es wirklich gibt.**
+                        //
+                        // Vorher rastete er auf 4096, 11264, 18432, 25600 und 32768 — einer
+                        // gleichmäßigen Teilung des Bereichs. Die Maschine kennt aber nur
+                        // 4096, 8192, 16384 und 32768 und rundet auf die nächstkleinere ab.
+                        // Drei der fünf Raststellen gab es also nicht: Wer den Regler von
+                        // 18432 auf 25600 schob, bekam beide Male 16384 und sah eine
+                        // Einstellung, die sich bewegen ließ und nichts bewirkte. Im
+                        // Protokoll stand dazu vierzehnmal, der Kontext sei „begrenzt"
+                        // worden, mit dem freien Speicher daneben — an dem es nie lag.
+                        //
+                        // Der Regler zählt jetzt Stufen-Indizes und nicht Token. Damit kann
+                        // er gar keinen Wert mehr anbieten, den es nicht gibt.
+                        val stufen = ProcessServerSupervisor.KONTEXT_STUFEN
+                        var stufe by remember(contextSize) {
+                            mutableFloatStateOf(
+                                stufen.indexOfFirst { it >= contextSize }
+                                    .let { if (it < 0) stufen.lastIndex else it }
+                                    .toFloat()
+                            )
+                        }
+                        val kontext = stufen[stufe.toInt().coerceIn(0, stufen.lastIndex)]
                         Slider(
-                            value = kontext,
-                            onValueChange = { kontext = it },
-                            onValueChangeFinished = { onContextSize(kontext.toInt()) },
-                            valueRange = ProcessServerSupervisor.MIN_CONTEXT_SIZE.toFloat()..
-                                ProcessServerSupervisor.MAX_CONTEXT_SIZE.toFloat(),
-                            // Vier Rastungen: 4096, 11264, 18432, 25600, 32768. Ein stufenloser
-                            // Regler gaukelte eine Genauigkeit vor, die die Sache nicht hat.
-                            steps = 3,
+                            value = stufe,
+                            onValueChange = { stufe = it },
+                            onValueChangeFinished = { onContextSize(kontext) },
+                            valueRange = 0f..stufen.lastIndex.toFloat(),
+                            steps = stufen.size - 2,
                         )
                         // Die Zahl gilt für das größte eingerichtete Modell: Es hat den
                         // teuersten Schlüssel-Wert-Speicher, und wer plant, soll den
@@ -750,6 +769,35 @@ private fun NeonScreen(
                                 "Antwort danach dauert entsprechend länger.",
                             style = MaterialTheme.typography.bodySmall,
                         )
+                    }
+                }
+
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("Dateizugriff", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(4.dp))
+                        // Bei jedem Aufbau der Ansicht neu gefragt: Die Freigabe wird in den
+                        // Systemeinstellungen erteilt, also außerhalb dieser App. Ein
+                        // gemerkter Wert stünde nach der Rückkehr noch auf „fehlt".
+                        val freigegeben = Speicherfreigabe.erteilt()
+                        Text(
+                            Speicherfreigabe.beschreibung(),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        if (!freigegeben) {
+                            Spacer(Modifier.height(8.dp))
+                            val kontext = LocalContext.current
+                            OutlinedButton(onClick = { Speicherfreigabe.anfordern(kontext) }) {
+                                Text("Freigabe erteilen")
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "Android fragt das nicht beim ersten Zugriff ab — die " +
+                                    "Freigabe wird in den Systemeinstellungen erteilt. Der " +
+                                    "Knopf führt dorthin.",
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
                     }
                 }
 

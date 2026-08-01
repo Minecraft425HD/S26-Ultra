@@ -122,17 +122,33 @@ class ToolRegistry(tools: List<Tool>) {
         }
     }
 
-    /** Die Werkzeugbeschreibung für den Systemprompt. */
+    /**
+     * Die Werkzeugbeschreibung für den Systemprompt.
+     *
+     * **Kompakt, und das ist eine Messung und keine Vorliebe.** Auf dem Gerät kostete das
+     * Verarbeiten eines Prompts von 1057 Token auf dem 4-B-Modell 16,2 Sekunden, bevor das
+     * erste Wort kam. Jede Zeile hier ist ein Teil davon.
+     *
+     * Gestrichen ist die eigene Zeile je Parameter mit Name, Typ und Beschreibung. Der Typ
+     * steht schon in der Grammatik, und die ist verbindlich — sie lässt gar nichts anderes
+     * zu. Was der Parameter bedeutet, steht jetzt hinter dem Namen in derselben Zeile. Das
+     * spart bei neun Werkzeugen mit siebzehn Parametern rund die Hälfte der Zeichen, ohne
+     * dass eine Auskunft verlorengeht.
+     */
     fun promptDescription(): String = buildString {
         appendLine("Verfügbare Werkzeuge:")
         for (spec in specs) {
-            append("- ").append(spec.name).append(": ").appendLine(spec.description)
-            for (parameter in spec.parameters) {
-                append("    ").append(parameter.name)
-                append(" (").append(parameter.type.name.lowercase())
-                if (!parameter.required) append(", optional")
-                append("): ").appendLine(parameter.description)
+            append("- ").append(spec.name).append(": ").append(spec.description)
+            if (spec.parameters.isNotEmpty()) {
+                append(" — ")
+                append(
+                    spec.parameters.joinToString("; ") { parameter ->
+                        val zusatz = if (parameter.required) "" else ", optional"
+                        "${parameter.name}$zusatz: ${parameter.description}"
+                    }
+                )
             }
+            appendLine()
         }
     }
 

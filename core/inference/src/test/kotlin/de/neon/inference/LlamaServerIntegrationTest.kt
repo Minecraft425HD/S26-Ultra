@@ -182,12 +182,18 @@ class LlamaServerIntegrationTest {
     }
 
     @Test
-    fun `die Grammatik erzwingt gueltiges JSON`() = runBlocking {
+    fun `die Grammatik erzwingt eine auswertbare Einordnung`() = runBlocking {
         val engine = engine() ?: return@runBlocking
         engine.load(testModel, modelFile)
 
-        // Genau der Weg, den Stufe 2 des Routers geht. Ein 135M-Modell würde ohne
-        // Grammatik nie brauchbares JSON liefern — mit Grammatik kann es gar nicht anders.
+        // Genau der Weg, den Stufe 2 des Routers geht. Ein 135M-Modell würde ohne Grammatik
+        // nie eine brauchbare Einordnung liefern — mit Grammatik kann es gar nicht anders.
+        //
+        // **Die Form hat sich geändert, der Zweck nicht.** Hier wurde JSON erzwungen:
+        // `{"kategorie":"CODE","komplexitaet":3,"braucht_web":false,…}`, rund 45 Token, von
+        // denen die Grammatik über dreißig ohnehin festlegte. Das half nichts — ein
+        // erzwungenes Token kostet denselben Rechendurchgang wie ein frei gewähltes. Jetzt
+        // ist es eine Zeile aus sechs bis acht Token.
         val chunks = withTimeout(TIMEOUT_MILLIS) {
             engine.generate(
                 GenerationRequest(
@@ -203,13 +209,21 @@ class LlamaServerIntegrationTest {
         }
 
         val raw = chunks.filterIsInstance<GenerationChunk.Token>().joinToString("") { it.text }
-        println("Grammatik-Ausgabe: $raw")
-        assertTrue(raw.trimStart().startsWith("{"), "vor dem JSON steht etwas: \"$raw\"")
+        val token = chunks.count { it is GenerationChunk.Token }
+        println("Grammatik-Ausgabe: \"$raw\" ($token Token)")
 
         val analysis = RouterLlmProtocol.parse(raw)
         assertNotNull(analysis, "die Ausgabe ließ sich nicht auswerten: $raw")
         assertTrue(analysis.category in TaskCategory.entries)
         assertTrue(analysis.complexity in 1..5)
+
+        // Die eigentliche Ersparnis, an einem echten Tokenizer gemessen statt geschätzt.
+        // Auf dem Gerät kostete jedes Token der Einordnung 65 ms.
+        assertTrue(
+            token <= 12,
+            "die Einordnung braucht $token Token — die kompakte Form soll unter zwölf " +
+                "bleiben: \"$raw\"",
+        )
     }
 
     @Test

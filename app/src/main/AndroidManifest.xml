@@ -11,6 +11,19 @@
     -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!--
+        Zugriff auf den gemeinsamen Speicher.
+
+        Der uebliche Weg waere das Storage Access Framework. Er scheidet aus: Die
+        Entwicklungsumgebung startet fremde Programme (aapt2, den Kotlin-Compiler, d8, den
+        Python-Starter), und keines davon kennt content://-Verweise. Sie brauchen Pfade im
+        Dateisystem. Siehe Speicherfreigabe.kt.
+
+        Die Berechtigung wird beim Start weder erbeten noch vorausgesetzt. Ohne sie arbeitet
+        Neon im eigenen Projektordner weiter und sagt das auch.
+    -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+
     <application
         android:name=".NeonApplication"
         android:allowBackup="false"

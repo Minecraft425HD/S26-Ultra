@@ -112,17 +112,48 @@ class WorkspaceTools(private val workspace: Workspace) {
     }
 
     /**
-     * Immer derselbe Satz, wenn ein Pfad aus dem Projekt hinausführt.
+     * Was in einem Verzeichnis liegt.
      *
-     * Bewusst ohne Vorwurf und mit der Angabe, was gilt: Das Modell soll daraus einen
-     * gültigen Pfad bilden können. Und bewusst ohne den absoluten Pfad des Projekts — den
-     * bräuchte es nicht, und was ein Modell sieht, schreibt es irgendwann hin.
+     * Für den Gerätespeicher, den man nicht vollständig aufzählen kann: Wer eine Datei in den
+     * Downloads sucht, nennt das Verzeichnis, und Neon sieht nach. Ohne das wäre eine
+     * Freigabe wertlos — man müsste jeden Dateinamen schon kennen.
      */
-    private fun draussen(pfad: String) = Ergebnis(
-        false,
-        "„$pfad\" liegt außerhalb des Projekts. Pfade sind immer relativ zum Projektordner.",
-        "Pfad außerhalb der Wurzel",
-    )
+    fun ordner(pfad: String): Ergebnis {
+        val eintraege = workspace.ordner(pfad)
+            ?: return if (workspace.datei(pfad) == null) draussen(pfad)
+            else Ergebnis(false, "„$pfad\" ist kein Verzeichnis.", "kein Verzeichnis")
+
+        if (eintraege.isEmpty()) return Ergebnis(true, "„$pfad\" ist leer.")
+        return Ergebnis(true, eintraege.joinToString("\n"), "${eintraege.size} Einträge")
+    }
+
+    /**
+     * Immer derselbe Satz, wenn ein Pfad aus allen erlaubten Orten hinausführt.
+     *
+     * **Mit der Aufzählung der erlaubten Orte.** Vorher stand hier nur „außerhalb des
+     * Projekts", und das Modell hatte keine Möglichkeit, daraus einen gültigen Pfad zu
+     * bilden — es riet weiter, und jeder Fehlversuch kostete eine halbe Minute. Seit es
+     * mehrere Orte gibt, ist die Angabe erst recht nötig: Ob der Gerätespeicher freigegeben
+     * ist, weiß das Modell sonst nicht.
+     */
+    private fun draussen(pfad: String): Ergebnis {
+        val orte = workspace.erlaubteWurzeln()
+        return Ergebnis(
+            false,
+            buildString {
+                append("„$pfad\" liegt außerhalb dessen, worauf ich zugreifen darf. ")
+                if (orte.size == 1) {
+                    append("Erlaubt ist nur der Projektordner; Pfade dorthin sind relativ. ")
+                    append("Für den übrigen Gerätespeicher fehlt die Freigabe.")
+                } else {
+                    append("Erlaubt sind: der Projektordner (relative Pfade) sowie ")
+                    append(orte.drop(1).joinToString(", ") { it.absolutePath })
+                    append(".")
+                }
+            },
+            "Pfad außerhalb der erlaubten Orte",
+        )
+    }
 
     private companion object {
         const val DATEI_GRENZE = 200

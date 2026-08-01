@@ -18,9 +18,24 @@ import java.io.File
  *
  * Ohne Android, damit sich die Grenze in einem Verzeichnis unter `/tmp` prüfen lässt.
  */
-class Workspace(wurzel: File) {
+class Workspace(
+    wurzel: File,
+    /**
+     * Weitere Orte, an denen Neon arbeiten darf — Downloads, Dokumente, was der Nutzer
+     * freigibt.
+     *
+     * **Eine Funktion und keine Liste.** Die Freigabe für den Gerätespeicher wird in den
+     * Systemeinstellungen erteilt und kann jederzeit zurückgenommen werden. Eine beim Bauen
+     * eingefrorene Liste hieße: Wer die Freigabe erteilt, muss Neon neu starten — und wer
+     * sie entzieht, wird trotzdem weiter gelesen. Beides falsch.
+     *
+     * Nur das Projektverzeichnis ist immer dabei; es gehört der App und braucht niemandes
+     * Erlaubnis.
+     */
+    private val weitereWurzeln: () -> List<File> = { emptyList() },
+) {
 
-    /** Das Projektverzeichnis, aufgelöst. Alles darunter ist erlaubt, alles daneben nicht. */
+    /** Das Projektverzeichnis, aufgelöst. Der Ort, auf den sich relative Pfade beziehen. */
     val wurzel: File = wurzel.canonicalFile
 
     init {
@@ -30,7 +45,35 @@ class Workspace(wurzel: File) {
     }
 
     /**
-     * Die Datei zu einem projektrelativen Pfad — oder `null`, wenn er hinausführt.
+     * Alle Orte, unter denen ein Zugriff erlaubt ist.
+     *
+     * Bei jedem Zugriff neu gefragt, siehe [weitereWurzeln]. Nicht vorhandene Verzeichnisse
+     * fliegen raus: Ein Ort, den es nicht gibt, kann nichts erlauben, und `canonicalFile`
+     * auf einen fehlenden Pfad liefert etwas, das zufällig irgendwo hinzeigt.
+     */
+    fun erlaubteWurzeln(): List<File> = buildList {
+        add(wurzel)
+        weitereWurzeln().forEach { ort ->
+            runCatching { ort.canonicalFile }.getOrNull()
+                ?.takeIf { it.isDirectory }
+                ?.let { add(it) }
+        }
+    }
+
+    /**
+     * Die Datei zu einem Pfad — oder `null`, wenn er aus allen erlaubten Orten hinausführt.
+     *
+     * Relative Pfade beziehen sich auf das Projekt, absolute auf das Gerät. **Absolute Pfade
+     * waren früher pauschal verboten**, mit der Begründung, sie würden die Wurzel übergehen.
+     * Das stimmte, solange es genau eine Wurzel gab. Seit der Nutzer weitere Orte freigeben
+     * kann, ist ein absoluter Pfad die einzige Art, eine Datei in seinen Downloads zu
+     * benennen — und die Grenze liegt ohnehin nicht an der Schreibweise, sondern daran, wo
+     * der aufgelöste Pfad landet.
+     *
+     * Geprüft wird weiterhin der **aufgelöste** Pfad. Ein Vergleich auf `".."` wäre keine
+     * Sicherung: Symbolische Verknüpfungen, `.` in der Mitte und kodierte Trenner gehen daran
+     * vorbei. `canonicalFile` löst all das auf, und danach ist die Frage schlicht, ob der
+     * Pfad unter einem erlaubten Ort liegt.
      *
      * `null` und keine Ausnahme, weil das der häufige Fall ist, sobald ein Modell die Pfade
      * liefert. Ein Werkzeug soll darauf mit einem Satz antworten können, nicht mit einem
@@ -39,12 +82,12 @@ class Workspace(wurzel: File) {
     fun datei(pfad: String): File? {
         if (pfad.isBlank()) return null
 
-        // Ein absoluter Pfad ist nie gemeint: Er würde die Wurzel schlicht übergehen.
-        val relativ = File(pfad)
-        if (relativ.isAbsolute) return null
+        val roh = File(pfad)
+        val ziel = runCatching {
+            if (roh.isAbsolute) roh.canonicalFile else File(wurzel, pfad).canonicalFile
+        }.getOrNull() ?: return null
 
-        val ziel = File(wurzel, pfad).canonicalFile
-        return if (ziel.liegtIn(wurzel)) ziel else null
+        return if (erlaubteWurzeln().any { ziel.liegtIn(it) }) ziel else null
     }
 
     /** Der Inhalt einer Datei, oder `null`, wenn es sie nicht gibt oder sie draußen liegt. */
@@ -90,8 +133,37 @@ class Workspace(wurzel: File) {
         .sorted()
         .toList()
 
+    /**
+     * Auflistung eines Verzeichnisses — auch außerhalb des Projekts.
+     *
+     * **Warum nicht einfach [dateien] erweitern.** Das Projekt lässt sich vollständig
+     * aufzählen; der Gerätespeicher nicht. Ein `walkTopDown` über `/storage/emulated/0`
+     * liefert zehntausende Einträge, von denen keiner die Frage beantwortet — und jeder
+     * kostet Kontext. Wer im Gerätespeicher etwas sucht, nennt ein Verzeichnis.
+     *
+     * Nicht rekursiv, aus demselben Grund. Verzeichnisse bekommen ein `/` angehängt, damit
+     * das Modell sieht, wo es weitersuchen kann.
+     *
+     * @return `null`, wenn der Pfad hinausführt oder kein Verzeichnis ist.
+     */
+    fun ordner(pfad: String, grenze: Int = ORDNER_GRENZE): List<String>? {
+        val ziel = datei(pfad)?.takeIf { it.isDirectory } ?: return null
+        return ziel.listFiles().orEmpty()
+            .sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+            .take(grenze)
+            .map { if (it.isDirectory) "${it.name}/" else "${it.name}  (${it.length()} B)" }
+    }
+
+    /**
+     * Wie eine Datei benannt wird, wenn sie zur Sprache kommt.
+     *
+     * Innerhalb des Projekts der kurze relative Pfad, außerhalb der volle. `relativeTo`
+     * lieferte für eine Datei in den Downloads sonst eine Kette aus `../..`, die weder zu
+     * lesen noch wieder zu öffnen ist.
+     */
     private fun relativ(datei: File): String =
-        datei.relativeTo(wurzel).path.replace(File.separatorChar, '/')
+        if (datei.liegtIn(wurzel)) datei.relativeTo(wurzel).path.replace(File.separatorChar, '/')
+        else datei.absolutePath
 
     private fun File.liegtIn(oben: File): Boolean {
         var lauf: File? = this
@@ -111,5 +183,14 @@ class Workspace(wurzel: File) {
          * davon ist zahlreich.
          */
         val UEBERGANGEN = setOf(".git", "build", ".gradle", "__pycache__", ".idea", "node_modules")
+
+        /**
+         * Wie viele Einträge eine Ordnerauflistung höchstens nennt.
+         *
+         * Ein Download-Ordner mit dreihundert Dateien beantwortet keine Frage besser als
+         * einer mit hundert — er kostet nur dreimal so viel Kontext und damit Wartezeit vor
+         * dem ersten Wort.
+         */
+        const val ORDNER_GRENZE = 100
     }
 }

@@ -150,15 +150,26 @@ class LocalRouterLlmTest {
     }
 
     @Test
-    fun `eine gelungene Einordnung schweigt`() = runTest {
+    fun `eine gelungene Einordnung meldet ihre Kosten`() = runTest {
         val zeilen = mutableListOf<String>()
         val engine = ScriptedEngine(validJson)
 
         LocalRouterLlm(engine, log = { zeilen += it }).analyzeSuspending(Utterance("hallo"))
 
-        // Der häufige Fall darf die Protokolldatei nicht füllen — sonst verdrängt er genau
-        // das, was man später lesen will.
-        assertTrue(zeilen.isEmpty(), "$zeilen")
+        // **Hier stand einmal das Gegenteil: dass der gelungene Fall schweigt.** Die
+        // Begründung war, dass der häufige Fall die Protokolldatei nicht füllen soll — und
+        // die stimmt für Meldungen, die nichts sagen.
+        //
+        // Diese sagt etwas. Im Geräteprotokoll war die Einordnung nur indirekt zu erkennen,
+        // an einem `print_timing` des Servers ohne zugehörige Antwortzeile. Zusammengerechnet
+        // waren es 45 Sekunden über fünfzehn Durchgänge, bei einem Durchgang bis zu 6,2
+        // Sekunden gegenüber 3,1 Sekunden für die eigentliche Antwort — der teuerste Posten
+        // eines kurzen Durchgangs, und der einzige ohne eigene Zeile. Eine Zeile je Durchgang
+        // neben der ohnehin vorhandenen Antwortzeile ist dafür kein hoher Preis.
+        assertEquals(1, zeilen.size, "$zeilen")
+        val meldung = zeilen.single()
+        assertTrue("ms" in meldung, "ohne Dauer ist die Zeile wertlos: $meldung")
+        assertTrue("Token" in meldung, meldung)
     }
 
     @Test

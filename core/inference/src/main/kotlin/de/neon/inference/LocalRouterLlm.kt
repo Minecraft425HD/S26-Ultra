@@ -55,6 +55,14 @@ class LocalRouterLlm(
     suspend fun analyzeSuspending(utterance: Utterance): RouteAnalysis? {
         if (engine.loadedModelId == null) return null
 
+        // **Die Einordnung ist der teuerste Teil eines kurzen Durchgangs, und das stand
+        // nirgends.** Im Geräteprotokoll war sie nur indirekt zu erkennen: an einem
+        // `print_timing` ohne zugehörige Antwortzeile. Gemessen wurden so bis zu 6,2
+        // Sekunden auf dem 4-B-Modell — bei einem Durchgang, dessen eigentliche Antwort 3,1
+        // Sekunden brauchte. Ohne Zahl lässt sich weder sehen, dass es teuer ist, noch, ob
+        // eine Änderung geholfen hat.
+        val begonnen = System.currentTimeMillis()
+
         val chunks = engine.generate(
             GenerationRequest(
                 messages = listOf(
@@ -80,21 +88,38 @@ class LocalRouterLlm(
             .filterIsInstance<GenerationChunk.Token>()
             .joinToString("") { it.text }
 
+        val dauer = System.currentTimeMillis() - begonnen
+        val token = chunks.count { it is GenerationChunk.Token }
+
         return RouterLlmProtocol.parse(raw)
+            ?.also { einordnung ->
+                log(
+                    "Einordnung ${einordnung.category}, Komplexität ${einordnung.complexity} " +
+                        "— $dauer ms, $token Token, ${engine.loadedModelId}"
+                )
+            }
             // Auch das ist ein Fehlschlag, nur ein anderer: Der Server lieferte, die Ausgabe
             // ließ sich aber nicht auswerten. Ohne Zeile sieht das genauso aus wie „Stufe 2
             // war gar nicht dran".
             ?: run {
-                log("Einordnung unlesbar, entscheide nach Regeln — \"${raw.take(120)}\"")
+                log(
+                    "Einordnung unlesbar nach $dauer ms, entscheide nach Regeln — " +
+                        "\"${raw.take(120)}\""
+                )
                 null
             }
     }
 
     private companion object {
         /**
-         * Das erwartete JSON ist kurz. Die Grenze verhindert, dass ein Modell, das die
-         * Grammatik nicht einhält, unbegrenzt weiterredet und Strom verbrennt.
+         * `KATEGORIE 3 n n n` — sechs bis acht Token.
+         *
+         * Hier standen 64, passend zum früheren JSON-Format. Die Grenze verhindert, dass ein
+         * Modell, das die Grammatik nicht einhält, unbegrenzt weiterredet und Strom
+         * verbrennt; großzügig gerundet reichen dafür jetzt 24. Der Unterschied ist keine
+         * Kosmetik: Bei einem Modell ohne wirksame Grammatik läuft genau diese Grenze aus,
+         * und bei zwölf Token je Sekunde sind 64 gegen 24 drei Sekunden Unterschied.
          */
-        const val MAX_TOKENS = 64
+        const val MAX_TOKENS = 24
     }
 }

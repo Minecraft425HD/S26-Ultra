@@ -272,14 +272,30 @@ class ProcessServerSupervisor(
         // verdrängen kann. Bei 1600 MB freien war Neon damit der dickste Brocken im System.
         val gewuenscht = contextSize
         val benutzt = passendeKontextgroesse(speicher.availableBytes, gewuenscht, kvBytesPerToken)
+
+        // **Die Meldung muss den richtigen Grund nennen.** Sie tat es nicht: Im
+        // Geräteprotokoll stand vierzehnmal „Kontext auf 16384 statt 18432 begrenzt … RAM:
+        // 10,5 von 14,8 GB frei" — und kein einziges Mal war der Speicher die Ursache. Der
+        // Regler stand auf 18432, und das ist keine der Stufen, die es gibt; gerundet wird
+        // auf 16384. Eine Meldung, die den freien Speicher im selben Atemzug nennt, liest
+        // sich aber wie Speichermangel, und danach sucht man an der falschen Stelle.
+        //
+        // Deshalb wird beides getrennt bestimmt: Was gäbe die Stufung her, und was gibt der
+        // Speicher her? Die Antwort auf die erste Frage ist eine Rundung, die auf die zweite
+        // eine Begrenzung.
+        val gerundet = naechsteStufe(gewuenscht)
         if (benutzt != gewuenscht) {
-            NeonLog.i(
-                TAG,
-                "Kontext auf $benutzt statt $gewuenscht begrenzt — " +
+            val grund = if (benutzt < gerundet) {
+                "der Speicher reicht dafür nicht — " +
                     "${benutzt.toLong() * kvBytesPerToken / MB} MB statt " +
                     "${gewuenscht.toLong() * kvBytesPerToken / MB} MB für den " +
-                    "Schlüssel-Wert-Speicher, ${speicher.describe()}",
-            )
+                    "Schlüssel-Wert-Speicher, ${speicher.describe()}"
+            } else {
+                "$gewuenscht ist keine der möglichen Stufen " +
+                    "(${KONTEXT_STUFEN.joinToString(", ")}), also die nächstkleinere. " +
+                    "Am Speicher liegt es nicht: ${speicher.describe()}"
+            }
+            NeonLog.i(TAG, "Kontext auf $benutzt statt $gewuenscht — $grund")
         }
         laufenderKontext = benutzt
 
@@ -716,8 +732,28 @@ class ProcessServerSupervisor(
                 ?: MIN_CONTEXT_SIZE
         }
 
-        /** Die Stufen, zwischen denen gewählt wird — dieselben wie am Regler. */
+        /**
+         * Die Stufen, zwischen denen gewählt wird — dieselben wie am Regler.
+         *
+         * **„Dieselben wie am Regler" stimmte nicht.** Der Regler rastete auf 4096, 11264,
+         * 18432, 25600 und 32768; hier standen 4096, 8192, 16384 und 32768. Drei der fünf
+         * Raststellen gab es also gar nicht, und wer eine davon wählte, bekam still die
+         * nächstkleinere. Wer den Regler von 18432 auf 25600 schob, bekam beide Male 16384 —
+         * eine Einstellung, die sich bewegen ließ und nichts bewirkte.
+         *
+         * Jetzt liest der Regler diese Liste. Zwei Listen mit derselben Bedeutung waren eine
+         * Liste zu viel.
+         */
         val KONTEXT_STUFEN = listOf(4_096, 8_192, 16_384, 32_768)
+
+        /**
+         * Die größte Stufe, die den Wunsch nicht überschreitet — ohne den Speicher zu fragen.
+         *
+         * Getrennt von [passendeKontextgroesse], damit sich Rundung und Speicherbegrenzung
+         * unterscheiden lassen. Genau diese Unterscheidung fehlte in der Meldung.
+         */
+        fun naechsteStufe(wunsch: Int): Int =
+            KONTEXT_STUFEN.filter { it <= wunsch }.maxOrNull() ?: MIN_CONTEXT_SIZE
 
         /**
          * Wie viel des freien Speichers der Schlüssel-Wert-Speicher höchstens belegen darf.

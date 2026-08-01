@@ -302,7 +302,14 @@ class NeonContainer(context: Context) {
      * Sprachmodell kommen und daneben das Gedächtnis, der Anhang-Index und die Modelldateien
      * liegen.
      */
-    val workspace = Workspace(File(appContext.filesDir, "projekt"))
+    val workspace = Workspace(
+        wurzel = File(appContext.filesDir, "projekt"),
+        // Bei jedem Zugriff neu gefragt statt beim Bauen eingefroren: Die Freigabe wird in
+        // den Systemeinstellungen erteilt und kann dort jederzeit zurueckgenommen werden.
+        // Eine gemerkte Liste hiesse, dass eine erteilte Freigabe erst nach einem Neustart
+        // wirkt und eine entzogene gar nicht.
+        weitereWurzeln = { Speicherfreigabe.wurzeln() },
+    )
 
     /**
      * Die Python-Umgebung.

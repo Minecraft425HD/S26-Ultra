@@ -92,11 +92,22 @@ log "für arm64-v8a konfigurieren"
 # auf dem Gerät kamen 0,71 Token je Sekunde heraus statt der erwarteten 15 bis 25.
 #
 # `dotprod` (ARMv8.2) und `fp16` gibt es auf praktisch jedem arm64-Telefon seit 2018.
-# Bewusst **ohne** `+i8mm`: Das brächte beim Verarbeiten langer Prompts noch einmal etwas,
-# aber ein Kern ohne diesen Befehl beendet das Programm sofort mit SIGILL. Dann wäre Neon
-# nicht langsam, sondern gar nicht da. Ob i8mm dazukommt, entscheidet die Merkmalszeile
-# aus /proc/cpuinfo, die Neon jetzt protokolliert — nicht eine Vermutung über das Gerät.
-ARM_ARCH="${GGML_CPU_ARM_ARCH:-armv8.2-a+dotprod+fp16}"
+#
+# `i8mm` kommt jetzt dazu, und das ist eine Entscheidung aufgrund einer Messung. Hier stand
+# es bewusst nicht drin, mit dem Vermerk: "Ob i8mm dazukommt, entscheidet die Merkmalszeile."
+# Die Merkmalszeile des Geraets sagt seit dem ersten Protokoll `i8mm ja` -- in jedem der
+# vierzehn Starts, ueber acht Baustaende hinweg.
+#
+# Was es bringt, ist genau das, was derzeit am meisten kostet: i8mm beschleunigt die
+# Matrixmultiplikation mit acht Bit, und die dominiert das Verarbeiten des Prompts. Gemessen
+# wurden auf dem 4-B-Modell 65 Token je Sekunde beim Prompt -- fuer die 1057 Token des
+# Systemprompts mit den Werkzeugen sind das 16,2 Sekunden, bevor das erste Wort kommt.
+#
+# Das Risiko ist benannt und begrenzt: Auf einem Prozessor ohne i8mm startet die Binaerdatei
+# nicht -- nicht langsam, sondern gar nicht. Sie wird ausschliesslich fuer dieses eine Geraet
+# gebaut, und dessen Merkmalszeile ist der Beleg. Wer sie anderswo braucht, setzt
+# GGML_CPU_ARM_ARCH und baut ohne.
+ARM_ARCH="${GGML_CPU_ARM_ARCH:-armv8.2-a+dotprod+fp16+i8mm}"
 
 cmake -B "$WORK/build-arm64" -G Ninja -S "$WORK" \
     -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK/build/cmake/android.toolchain.cmake" \

@@ -587,6 +587,7 @@ class ConversationOrchestrator(
                     else emptyList()
                     add(ChatMessage(Role.USER, utterance.text, bilder))
                 },
+                maxTokens = ANTWORT_MAX_TOKENS,
             )
         ).collect { chunk ->
             when (chunk) {
@@ -661,7 +662,7 @@ class ConversationOrchestrator(
 
         log(
             "Antwort fertig — ${selection.model.id}, $tokens Token, $latency ms, " +
-                "${sichtbareAntwort.length} Zeichen"
+                "${sichtbareAntwort.length} Zeichen · " + geraetelage()
         )
 
         return TurnReport(
@@ -846,6 +847,26 @@ class ConversationOrchestrator(
      * Wiederholen bei Speichermangel: dasselbe Modell, derselbe Kontext, dasselbe Ende — nur
      * doppelt so spät sichtbar.
      */
+    /**
+     * Akku und Wärme in einem Halbsatz.
+     *
+     * **Warum das an der Antwortzeile hängt.** Im Geräteprotokoll bricht die
+     * Erzeugungsgeschwindigkeit innerhalb einer einzigen Antwort von 13,5 auf 7 bis 9 Token je
+     * Sekunde ein — je länger die Antwort, desto langsamer, und beim nächsten Durchgang steht
+     * sie wieder bei 13,5. Zwei Erklärungen kommen infrage: Der Prozessor drosselt wegen
+     * Wärme, oder er fällt nach dem anfänglichen Schub in den Dauertakt. Die eine ließe sich
+     * durch Abkühlen beheben, die andere nicht.
+     *
+     * Entscheiden lässt sich das nur mit dem Thermalzustand — und der wurde bisher zwar für
+     * die Modellauswahl **gelesen**, aber nirgends geschrieben. Er stand in keiner einzigen
+     * Zeile der Protokolle von zwei Tagen.
+     */
+    private fun geraetelage(): String = runCatching {
+        val zustand = deviceState()
+        val laden = if (zustand.isCharging) ", lädt" else ""
+        "Akku ${zustand.batteryPercent} %$laden, Wärme ${zustand.thermalStatus.name.lowercase()}"
+    }.getOrDefault("Gerätelage unbekannt")
+
     private suspend fun abbruch(
         transcript: String,
         selection: de.neon.router.ModelSelection,
@@ -925,6 +946,21 @@ class ConversationOrchestrator(
          * Genug, um einen Pfad und den Anfang eines Inhalts zu erkennen — und wenig genug,
          * dass eine geschriebene Datei die Protokolldatei nicht zweimal enthält.
          */
+        /**
+         * Wie lang eine Antwort werden darf.
+         *
+         * **Hier griff stillschweigend die Vorgabe von 512.** Im Geräteprotokoll enden zwei
+         * Antworten bei exakt 512 erzeugten Token — beide die längsten des Tages, beide
+         * mitten im Satz. Für den Nutzer sah das aus, als hätte das Modell den Faden
+         * verloren.
+         *
+         * Verdoppelt und nicht weiter: Bei zwölf Token je Sekunde sind 1024 Token schon
+         * anderthalb Minuten. Das ist eine Obergrenze und kein Ziel — das Modell hört von
+         * selbst auf, wenn es fertig ist, und die längsten beobachteten Antworten lagen bei
+         * rund 1800 Zeichen. Die Grenze fängt nur den Fall ab, dass es das nicht tut.
+         */
+        const val ANTWORT_MAX_TOKENS = 1_024
+
         const val ARGUMENT_IM_PROTOKOLL = 120
 
         /**

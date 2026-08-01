@@ -199,8 +199,20 @@ class ModelRegistry(models: List<ModelSpec>) {
                     // Geschätzt, und zwar aus dem, was gemessen wurde: Sobald die Gewichte
                     // liegen bleiben, ist die Erzeugung nicht mehr durch Flash begrenzt.
                     // Die Zahl gehört ersetzt, sobald sie auf dem Gerät gemessen ist.
-                    tokensPerSecond = 12.0,
-                    loadCostMillis = 900,
+                    // **Gemessen auf dem Gerät, nicht geschätzt.** Hier standen 12,0 —
+                    // und beim 4-B-Modell 22,0, also die umgekehrte Reihenfolge der
+                    // Wirklichkeit. Das Protokoll von zwei Tagen zeigt für dieses Modell
+                    // Erzeugungsraten zwischen 19,4 und 42,7 Token je Sekunde, im Mittel
+                    // rund 32; das Alltagsmodell schafft 9 bis 18.
+                    //
+                    // Die Zahl geht direkt in die Kostenbewertung der Auswahl ein. Solange
+                    // sie das 4-B-Modell für fast doppelt so schnell hielt wie dieses,
+                    // belohnte die Bewertung genau den Wechsel, der jedes Mal einen
+                    // Serverneustart kostete — vier Wechsel in 84 Sekunden standen im
+                    // Protokoll.
+                    tokensPerSecond = 32.0,
+                    // Gemessen: 2014 bis 3543 ms für 1056 MB, sechs Ladevorgänge.
+                    loadCostMillis = 2_500,
                     energyPerToken = 0.45,
                     residentByDefault = true,
                 ),
@@ -218,8 +230,15 @@ class ModelRegistry(models: List<ModelSpec>) {
                         TaskCategory.GERAETE_AKTION,
                     ),
                     maxComplexity = 3,
-                    tokensPerSecond = 22.0,
-                    loadCostMillis = 1_800,
+                    // Gemessen: 9,1 bis 17,9 Token je Sekunde, Mittelwert rund 15 — aber
+                    // das gilt nur für kurze Antworten. Über eine lange Antwort fällt die
+                    // Momentangeschwindigkeit von 13,5 auf 7 bis 9, weil der Prozessor nach
+                    // dem anfänglichen Schub in den Dauerbetrieb geht. Hier steht der
+                    // Dauerwert und nicht der Anfangswert: Wer plant, plant mit dem, was
+                    // durchgehalten wird.
+                    tokensPerSecond = 12.0,
+                    // Gemessen: 3272 bis 5817 ms für 2381 MB, sieben Ladevorgänge.
+                    loadCostMillis = 4_000,
                     energyPerToken = 1.0,
                     residentByDefault = true,
                 ),

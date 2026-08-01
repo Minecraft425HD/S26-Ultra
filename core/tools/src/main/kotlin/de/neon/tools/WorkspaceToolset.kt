@@ -39,14 +39,38 @@ object WorkspaceToolset {
         build: AndroidBuild? = null,
     ): List<Tool> = buildList {
         val tools = WorkspaceTools(workspace)
-        add(DateiLesen(tools))
+
+        // **Nur, was gerade gelingen kann.** Jedes angebotene Werkzeug steht zweimal im
+        // Prompt — als Beschreibung und in der Grammatik — und kostet damit Zeit vor dem
+        // ersten Wort. Auf dem Gerät waren das bei 1057 Prompt-Token 16,2 Sekunden.
+        //
+        // Die Auswahl rät dabei nicht am Wortlaut der Frage herum. Sie sieht nach, was da
+        // ist: In einem leeren Projekt ohne Freigabe kann `datei-lesen` nichts lesen und
+        // `datei-aendern` nichts ändern — beide könnten nur scheitern. Ein Werkzeug
+        // wegzulassen, das ohnehin nur eine Fehlermeldung liefert, nimmt niemandem etwas
+        // und spart dem Modell die Versuchung: Ein 4-B-Modell, dem man `datei-aendern`
+        // anbietet, benutzt es irgendwann, auch wenn es keine Datei gibt.
+        val gibtDateien = workspace.dateien().isNotEmpty()
+        val gibtOrte = workspace.erlaubteWurzeln().size > 1
+
         add(DateiSchreiben(tools))
-        add(DateiAendern(tools))
-        add(DateienAuflisten(tools))
+        if (gibtDateien || gibtOrte) {
+            add(DateiLesen(tools))
+            add(OrdnerAnsehen(tools))
+        }
+        if (gibtDateien) {
+            add(DateiAendern(tools))
+            add(DateienAuflisten(tools))
+        }
         if (python != null) add(PythonAusfuehren(workspace, python))
         if (build != null) {
             add(AppAnlegen(workspace))
-            add(AppBauen(workspace, build) { paketnameAus(workspace) })
+            // Bauen setzt ein Manifest voraus. Ohne eines antwortete dieses Werkzeug bisher
+            // „Es gibt noch kein Android-Projekt" — eine halbe Minute Erzeugungszeit für
+            // eine Auskunft, die schon vor dem Aufruf feststand.
+            if (paketnameAus(workspace) != null) {
+                add(AppBauen(workspace, build) { paketnameAus(workspace) })
+            }
         }
         // Zuletzt, damit es in der Beschreibung unter den Handlungen steht: Erst was Neon
         // tun kann, dann der Ausweg, wenn unklar ist, welche davon gemeint ist.
@@ -135,6 +159,32 @@ private class DateienAuflisten(private val tools: WorkspaceTools) : Tool {
 
     override suspend fun execute(arguments: Map<String, String>): ToolResult =
         tools.dateien().alsToolResult()
+}
+
+/**
+ * Sieht in einem Verzeichnis nach — auch außerhalb des Projekts.
+ *
+ * Getrennt von `dateien-auflisten`, weil die beiden verschiedene Fragen beantworten: Das
+ * Projekt lässt sich vollständig aufzählen, der Gerätespeicher nicht. Ein rekursiver Lauf
+ * über `/storage/emulated/0` lieferte zehntausend Einträge, von denen keiner die Frage
+ * beantwortet, und verbrauchte dabei das ganze Kontextfenster.
+ */
+private class OrdnerAnsehen(private val tools: WorkspaceTools) : Tool {
+    override val spec = ToolSpec(
+        name = "ordner-ansehen",
+        description = "Zeigt, was in einem Verzeichnis liegt — im Projekt oder, wenn " +
+            "freigegeben, im Gerätespeicher. Nicht rekursiv.",
+        parameters = listOf(
+            ToolParameter(
+                "pfad",
+                ParameterType.STRING,
+                "Verzeichnis, etwa src oder /storage/emulated/0/Download",
+            ),
+        ),
+    )
+
+    override suspend fun execute(arguments: Map<String, String>): ToolResult =
+        tools.ordner(arguments["pfad"].orEmpty()).alsToolResult()
 }
 
 /**
