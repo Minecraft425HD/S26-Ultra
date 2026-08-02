@@ -97,6 +97,21 @@ class ToolRegistry(tools: List<Tool>) {
 
     operator fun get(name: String): Tool? = byName[name]
 
+    /**
+     * Dieselbe Zusammenstellung ohne die genannten Werkzeuge.
+     *
+     * **Wozu das gebraucht wird.** In der ersten Runde einer Werkzeugkette ist `fertig`
+     * sinnlos — man kann nicht fertig sein, bevor irgendetwas geschehen ist. Angeboten
+     * wurde es trotzdem, und das Gerät hat prompt vorgeführt, warum das ein Fehler ist:
+     * Auf eine Programmieraufgabe der Komplexität 5 rief das Modell in Runde 1 `fertig`
+     * und erklärte die Arbeit für erledigt, ohne eine Zeile geschrieben zu haben.
+     *
+     * Ein Modell wählt, was dasteht. Also darf in Runde 1 nicht dastehen, was dort nicht
+     * hingehört.
+     */
+    fun ohne(vararg namen: String): ToolRegistry =
+        ToolRegistry(specs.mapNotNull { byName[it.name] }.filter { it.spec.name !in namen })
+
     suspend fun execute(call: ToolCall): ToolResult {
         val tool = byName[call.name]
             ?: return ToolResult.Failed(

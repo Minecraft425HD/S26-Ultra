@@ -87,6 +87,27 @@ data class DeviceState(
      */
     fun groesse(model: ModelSpec): Long = gemesseneGroessen[model.id] ?: model.sizeBytes
 
+    /**
+     * Wie groß ein Modell im Sparmodus höchstens sein darf.
+     *
+     * **Hier stand eine Zahl, und die Zahl handelte vom falschen Ding.** Drei Gigabyte,
+     * gewählt, als „Sparmodus" noch hieß: wenig Akku. Für Hitze ist Größe aber nur ein
+     * Näherungswert für das, worauf es ankommt — wie viel gerechnet wird.
+     *
+     * Jetzt gemessen. Bei `severe` fiel das 4-B-Modell von 12,8 auf **8,29** Token je
+     * Sekunde; eine Antwort von 999 Token brauchte 138 Sekunden. Das kleine Modell hielt im
+     * selben Zeitraum 25,9 bis 27,6 — über alle Wärmezustände hinweg praktisch unverändert.
+     * Hitze trifft das große Modell hart und das kleine kaum, denn sie bestraft anhaltende
+     * Rechenlast, und davon hat das eine dreimal so viel.
+     *
+     * Die alten drei Gigabyte ließen das 4-B-Modell (gemessen 2,33 GB) auch bei `severe`
+     * durch. Genau das ist im Protokoll passiert.
+     */
+    fun groessengrenze(): Long = when (thermalStatus) {
+        ThermalStatus.SEVERE, ThermalStatus.CRITICAL -> HEISS_MAX_SIZE_BYTES
+        else -> SPARSAM_MAX_SIZE_BYTES
+    }
+
     fun fitsInMemory(model: ModelSpec): Boolean =
         isLoaded(model) || groesse(model) <= availableMemoryBytes
 
@@ -106,6 +127,29 @@ data class DeviceState(
 
     companion object {
         const val LOW_BATTERY_PERCENT = 20
+
+        /**
+         * Die Obergrenze bei knappem Akku oder mäßiger Hitze.
+         *
+         * Drei Gigabyte lassen das Alltagsmodell zu und die großen nicht. Bei `moderate`
+         * bleibt es dabei: Dort verliert das 4-B-Modell messbar, aber nicht dramatisch —
+         * 12,77 statt der rund 15 Token je Sekunde ohne Hitze.
+         */
+        const val SPARSAM_MAX_SIZE_BYTES = 3L * 1024 * 1024 * 1024
+
+        /**
+         * Die Obergrenze ab `severe`, und sie lässt nur noch das kleine Modell durch.
+         *
+         * Gemessen: Bei `severe` erzeugte das 4-B-Modell 8,29 Token je Sekunde, und eine
+         * Antwort von 999 Token brauchte 138 Sekunden. Das 1.7B lag im selben Protokoll
+         * zwischen 25,9 und 27,6 — bei `none`, `light` und `moderate` praktisch gleich. Für
+         * dieselbe Antwort hätte es rund 35 Sekunden gebraucht statt 138.
+         *
+         * Anderthalb Gigabyte liegen über dem 1.7B (gemessen 1,03 GB) und unter dem 4-B
+         * (2,33 GB). Ein bereits geladenes Modell bleibt ausgenommen — es neu zu tauschen
+         * würde die Hitze nur weiter befeuern.
+         */
+        const val HEISS_MAX_SIZE_BYTES = 3L * 1024 * 1024 * 1024 / 2
 
         /** Ein neutraler Zustand für Tests und für den ersten Start. */
         fun unknown(): DeviceState = DeviceState(

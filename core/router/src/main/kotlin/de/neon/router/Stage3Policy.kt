@@ -116,7 +116,7 @@ class SelectionPolicy(
         // Im Sparmodus bleiben große Modelle außen vor — es sei denn, sie liegen ohnehin
         // schon im Speicher, dann kostet ihre Nutzung keine Ladeenergie mehr.
         if (!relaxed && state.isConstrained && !state.isLoaded(model)) {
-            if (state.groesse(model) > CONSTRAINED_MAX_SIZE_BYTES) return false
+            if (state.groesse(model) > state.groessengrenze()) return false
         }
         return true
     }
@@ -229,8 +229,10 @@ class SelectionPolicy(
     }
 
     private companion object {
-        /** Im Sparmodus wird nichts Neues über dieser Größe geladen. */
-        const val CONSTRAINED_MAX_SIZE_BYTES = 3L * 1024 * 1024 * 1024
+        // Die Größengrenze im Sparmodus steht jetzt in `DeviceState.groessengrenze()`.
+        // Dorthin gehört sie, weil sie vom Wärmezustand abhängt und den kennt der
+        // Gerätezustand — hier stand eine Zahl, die von Größe handelte, während es auf
+        // Rechenlast ankommt.
 
         /** Ab dieser Komplexität gilt eine Aufgabe als Fall für ein Denkmodell. */
         const val DEEP_COMPLEXITY = 4

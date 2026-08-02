@@ -574,6 +574,8 @@ class ConversationOrchestrator(
         val answer = StringBuilder()
         val pending = StringBuilder()
         var tokens = 0
+        var letztesToken = clock()
+        var laengsterAbstand = 0L
         // Wie viel der gefilterten Antwort schon ans Sprechen weitergegeben wurde.
         var gesprochen = 0
         var failure: String? = null
@@ -608,6 +610,22 @@ class ConversationOrchestrator(
             when (chunk) {
                 is GenerationChunk.Token -> {
                     tokens++
+                    // **Wie lange nichts kam.** Am Gerät blieb eine Antwort mitten im Strom
+                    // stehen: ein einziges Token in sechseinhalb Minuten, danach lief sie
+                    // mit elf Token je Sekunde weiter, als sei nichts gewesen. Am Ende
+                    // meldete der Durchgang 556 Sekunden und der Server 213 — die Differenz
+                    // war der Stillstand, und niemand konnte sie benennen.
+                    //
+                    // Das ist keine Drosselung; Hitze bremst allmählich. So sieht es aus,
+                    // wenn Android den Prozess einfriert. Gemessen wird deshalb der größte
+                    // Abstand zwischen zwei Token, nicht der Durchschnitt: Ein Mittelwert
+                    // verteilt sechs Minuten Stillstand über tausend Token und macht daraus
+                    // eine unauffällige Verlangsamung.
+                    val jetzt = clock()
+                    val abstand = jetzt - letztesToken
+                    if (abstand > laengsterAbstand) laengsterAbstand = abstand
+                    letztesToken = jetzt
+
                     answer.append(chunk.text)
 
                     // Gesprochen wird nur, was nach dem Filtern übrig bleibt.
@@ -677,7 +695,8 @@ class ConversationOrchestrator(
 
         log(
             "Antwort fertig — ${selection.model.id}, $tokens Token, $latency ms, " +
-                "${sichtbareAntwort.length} Zeichen · " + geraetelage()
+                "${sichtbareAntwort.length} Zeichen · " + geraetelage() +
+                stillstand(laengsterAbstand)
         )
 
         return TurnReport(
@@ -745,6 +764,18 @@ class ConversationOrchestrator(
         var letztesWerkzeug: String? = null
 
         for (runde in 1..rundenGrenze) {
+            // **In Runde eins gibt es kein `fertig`.** Man kann nicht fertig sein, bevor
+            // etwas geschehen ist — und das Gerät hat vorgeführt, warum das kein
+            // theoretischer Einwand ist: Auf eine Programmieraufgabe der Komplexität 5 rief
+            // das Modell in der ersten Runde `fertig` und erklärte die Arbeit für erledigt,
+            // ohne eine Zeile geschrieben zu haben. Im Protokoll stand danach nur
+            // „Werkzeugkette beendet nach 1 Runde(n)" und sonst nichts.
+            //
+            // Ein Modell wählt, was dasteht. Also darf in Runde eins nicht dastehen, was
+            // dort nicht hingehört.
+            val runFuerDieseRunde =
+                if (runde == 1) registry.ohne(Fertig.NAME) else registry
+
             val raw = StringBuilder()
             var tokens = 0
             var failure: String? = null
@@ -758,7 +789,7 @@ class ConversationOrchestrator(
                                 Role.SYSTEM,
                                 NeonPrompts.systemPrompt(
                                     memoryContext = memoryContext,
-                                    toolDescription = registry.promptDescription(),
+                                    toolDescription = runFuerDieseRunde.promptDescription(),
                                     spoken = speakThisTurn,
                                     // Auch hier: "ändere die markierte Stelle" ist ein
                                     // Werkzeugaufruf, und ohne den Ausschnitt wüsste das
@@ -776,11 +807,11 @@ class ConversationOrchestrator(
                     // rund 400 Zeichen mitten im Inhalt ab; danach war es kein JSON mehr,
                     // und der Nutzer hörte „Das habe ich nicht als Befehl verstanden" — bei
                     // einem Aufruf, den das Modell völlig richtig begonnen hatte.
-                    maxTokens = registry.maxAntwortToken(),
+                    maxTokens = runFuerDieseRunde.maxAntwortToken(),
                     temperature = 0f,
                     // Erzwungene Grammatik: Auch ein 4B-Modell gibt damit einen gültigen
                     // Aufruf aus, statt in Prosa zu beschreiben, was es tun würde.
-                    grammar = registry.grammar(),
+                    grammar = runFuerDieseRunde.grammar(),
                 )
             ).collect { chunk ->
                 when (chunk) {
@@ -818,7 +849,8 @@ class ConversationOrchestrator(
                 // verstanden hat.
                 log(
                     "Werkzeugaufruf unlesbar in Runde $runde — ${selection.model.id}, " +
-                        "$tokens Token, ${registry.specs.size} Werkzeuge angeboten, " +
+                        "$tokens Token, ${runFuerDieseRunde.specs.size} Werkzeuge " +
+                        "angeboten, " +
                         "Rohausgabe: " + raw.toString().gekuerzt(ROHAUSGABE_IM_PROTOKOLL)
                 )
                 if (gesprochenes.isEmpty()) {
@@ -948,6 +980,19 @@ class ConversationOrchestrator(
      * doppelt so spät sichtbar.
      */
     /**
+     * Die längste Pause zwischen zwei Token — aber nur, wenn sie auffällig war.
+     *
+     * **Warum eine Schwelle und keine Zahl in jeder Zeile.** Zwischen zwei Token liegen im
+     * Normalfall achtzig bis zweihundert Millisekunden; das jedes Mal zu melden wäre eine
+     * Spalte, die immer dasselbe sagt. Interessant wird es erst, wenn eine Pause länger ist
+     * als jede vertretbare Rechenzeit für ein einzelnes Token — dann rechnet nicht das
+     * Modell langsam, sondern es rechnet gar nicht.
+     */
+    private fun stillstand(laengsterAbstandMillis: Long): String =
+        if (laengsterAbstandMillis < STILLSTAND_SCHWELLE_MILLIS) ""
+        else " · Stillstand: ${laengsterAbstandMillis / 1000} s zwischen zwei Token"
+
+    /**
      * Akku und Wärme in einem Halbsatz.
      *
      * **Warum das an der Antwortzeile hängt.** Im Geräteprotokoll bricht die
@@ -1072,6 +1117,15 @@ class ConversationOrchestrator(
          * Compilers reicht es; wer den vollen Inhalt braucht, liest die Datei.
          */
         const val ERGEBNIS_IM_VERLAUF = 400
+
+        /**
+         * Ab wann eine Pause zwischen zwei Token gemeldet wird.
+         *
+         * Fünf Sekunden. Das langsamste beobachtete Modell schafft acht Token je Sekunde,
+         * also 125 Millisekunden je Token; selbst der zehnfache Wert bliebe weit darunter.
+         * Wer fünf Sekunden auf ein einziges Token wartet, wartet nicht auf Rechenarbeit.
+         */
+        const val STILLSTAND_SCHWELLE_MILLIS = 5_000L
 
 
         /**

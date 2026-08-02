@@ -83,7 +83,8 @@ class WerkzeugketteTest {
         override suspend fun unload() { loadedModelId = null }
 
         override fun generate(request: GenerationRequest): Flow<GenerationChunk> = flow {
-            prompts += request.messages.joinToString("\n") { "${it.role}: ${it.content}" }
+            prompts += request.messages.joinToString("\n") { "${it.role}: ${it.content}" } +
+                "\nGRAMMATIK: " + request.grammar.orEmpty()
             val ausgabe = ausgaben.getOrElse(aufrufe) { ausgaben.last() }
             aufrufe++
             emit(GenerationChunk.Token(ausgabe))
@@ -188,6 +189,38 @@ class WerkzeugketteTest {
                 "Die Zähler-App liegt als APK bereit.",
             ),
             tts.spoken,
+        )
+    }
+
+    @Test
+    fun `in der ersten Runde gibt es kein fertig`() = runTest {
+        // **Der Fehler, den das Gerät vorgeführt hat.** Auf eine Programmieraufgabe der
+        // Komplexität 5 rief das Modell in Runde eins `fertig` und erklärte die Arbeit für
+        // erledigt, ohne eine Zeile geschrieben zu haben. Im Protokoll stand danach nur
+        // „Werkzeugkette beendet nach 1 Runde(n)" und sonst nichts.
+        //
+        // Ein Modell wählt, was dasteht. Also darf in Runde eins nicht dastehen, was dort
+        // nicht hingehört: Man kann nicht fertig sein, bevor etwas geschehen ist.
+        val anlegen = NotierendesWerkzeug("app-anlegen", "Projekt angelegt.")
+        val protokoll = mutableListOf<String>()
+        val engine = SkriptEngine(listOf(ruf("app-anlegen", "de.neon.zaehler")))
+
+        aufbau(
+            "mach mir eine app", TaskCategory.CODE, engine, FakeTts(),
+            listOf(anlegen, Fertig()), protokoll,
+        ).handleUtterance(samples)
+
+        // Die erste Anfrage darf `fertig` weder in der Beschreibung noch in der Grammatik
+        // enthalten — geprüft am Prompt, den die Engine tatsächlich bekommen hat.
+        assertTrue(
+            Fertig.NAME !in engine.prompts.first(),
+            "„fertig\" stand schon in der ersten Runde im Prompt:\n${engine.prompts.first()}",
+        )
+        // Ab der zweiten schon: Ohne das könnte die Kette nur noch an der Grenze enden.
+        assertTrue(engine.prompts.size >= 2, "es gab keine zweite Runde")
+        assertTrue(
+            Fertig.NAME in engine.prompts[1],
+            "„fertig\" fehlt auch in der zweiten Runde:\n${engine.prompts[1]}",
         )
     }
 
