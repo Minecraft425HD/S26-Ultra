@@ -40,7 +40,20 @@ object RouterLlmProtocol {
         appendLine("Kategorien:")
         appendLine("- SMALLTALK: Begrüßung, Geplauder, kurze persönliche Bemerkung")
         appendLine("- WISSENSFRAGE: Faktenfrage aus dem Allgemeinwissen")
-        appendLine("- CODE: Programmieren, Shell, Konfiguration, Fehlersuche in Code")
+        // **Die Entwicklungsumgebung stand hier nicht drin, und das hat sie unerreichbar
+        // gemacht.** „Programmieren, Shell, Konfiguration, Fehlersuche" beschreibt jemanden,
+        // der über Code redet — nicht jemanden, der eine App bauen lässt. Auf „mach mir eine
+        // Zähler-App für Android und erstelle das Projekt, danach direkt kompilieren"
+        // antwortete das Router-Modell mit WISSENSFRAGE, und Neon gab eine Anleitung aus, wie
+        // man das in Android Studio macht.
+        //
+        // Das war keine Fehlleistung des Modells: Es konnte nicht wissen, dass Neon Projekte
+        // anlegt, Dateien schreibt und APKs baut. Hier steht, was Neon kann.
+        appendLine(
+            "- CODE: Programmieren, Fehlersuche — und alles, was Neon selbst im Projekt tut: " +
+                "eine App oder ein Projekt anlegen, Dateien lesen, schreiben und ändern, " +
+                "bauen, kompilieren, eine APK erzeugen, Python ausführen"
+        )
         appendLine("- LOGIK_MATHE: Rechnen, mehrstufiges Schlussfolgern, Planen, Knobeln")
         appendLine("- BILD: braucht ein Bild als Eingabe")
         appendLine("- GERAETE_AKTION: Handlung auf dem Gerät oder im Smart Home")

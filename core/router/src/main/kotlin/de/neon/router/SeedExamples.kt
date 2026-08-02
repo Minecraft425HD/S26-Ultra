@@ -54,6 +54,35 @@ object SeedExamples {
         Seed("warum kompiliert mein rust programm nicht", TaskCategory.CODE, 4),
         Seed("schreib mir eine regex für email adressen", TaskCategory.CODE, 3),
 
+        // --- Code: die eigene Entwicklungsumgebung ------------------------------------
+        //
+        // **Diese Beispiele fehlten, und das hat die IDE unerreichbar gemacht.** Die neun
+        // Beispiele darüber handeln alle vom Schreiben eines Schnipsels — Skript, Funktion,
+        // Schleife, Regex. Die Wörter, mit denen jemand eine App bauen lässt, kamen in
+        // keinem davon vor: App, Projekt, anlegen, bauen, kompilieren, installieren.
+        //
+        // Stufe 1 misst lexikalische Ähnlichkeit. Fehlt die Vokabel, gibt es keinen Treffer,
+        // und zwar keinen schwachen, sondern gar keinen: „bau die App" lag unter der
+        // Mindestähnlichkeit von 0,30 zu jedem einzelnen Beispiel. Damit fiel jede
+        // App-Anfrage auf Stufe 2 durch — und die ordnete „mach mir eine Zähler-App für
+        // Android und erstelle das Projekt, danach direkt kompilieren" als Wissensfrage ein.
+        // Neon antwortete mit einer Anleitung, wie man das in Android Studio macht.
+        //
+        // Zwei Fliegen: Sätze, die Stufe 1 sicher trifft, sparen zugleich den Aufruf von
+        // Stufe 2 — auf diesem Gerät ein bis vier Sekunden je Durchgang.
+        Seed("mach mir eine app für android", TaskCategory.CODE, 4),
+        Seed("erstell mir eine zähler app", TaskCategory.CODE, 4),
+        Seed("leg ein neues android projekt an", TaskCategory.CODE, 3),
+        Seed("bau die app", TaskCategory.CODE, 3),
+        Seed("kompilier das projekt", TaskCategory.CODE, 3),
+        Seed("erstelle das projekt und kompiliere es danach", TaskCategory.CODE, 4),
+        Seed("bau mir daraus eine apk zum installieren", TaskCategory.CODE, 4),
+        Seed("leg eine datei an und schreib den code hinein", TaskCategory.CODE, 3),
+        Seed("lies die datei und zeig mir was drinsteht", TaskCategory.CODE, 2),
+        Seed("ändere die markierte stelle im quelltext", TaskCategory.CODE, 3),
+        Seed("führ das python skript aus und zeig die ausgabe", TaskCategory.CODE, 3),
+        Seed("welche dateien liegen im projekt", TaskCategory.CODE, 2),
+
         // --- Logik und Mathematik ----------------------------------------------------
         Seed("was ist siebzehn mal dreiundzwanzig", TaskCategory.LOGIK_MATHE, 2),
         Seed("wenn drei maler drei wände in drei stunden streichen wie lange brauchen neun", TaskCategory.LOGIK_MATHE, 4),
