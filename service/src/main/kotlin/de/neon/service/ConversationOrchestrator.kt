@@ -567,14 +567,25 @@ class ConversationOrchestrator(
             }
             return handleToolCall(
                 selection, utterance, transcript, memoryContext, startedAt,
-                passendeWerkzeuge, runden,
+                passendeWerkzeuge,
+                // Die Zusammenstellung **je Runde** neu, nicht einmal für den Durchgang.
+                // Siehe die Begründung an `werkzeugeJetzt` in `handleToolCall`.
+                werkzeugeJetzt = when (selection.analysis.category) {
+                    TaskCategory.GERAETE_AKTION -> tools
+                    else -> codeTools
+                },
+                rundenGrenze = runden,
             )
         }
 
         val answer = StringBuilder()
         val pending = StringBuilder()
         var tokens = 0
-        var letztesToken = clock()
+        // `null`, bis das erste Token da ist. Davor liegt die Verarbeitung des Prompts, und
+        // die dauert legitim lange — bei 1228 Token auf dem 4-B-Modell zwanzig Sekunden. Als
+        // Abstand gezählt hätte das aus jeder zweiten Antwort einen gemeldeten Stillstand
+        // gemacht, und eine Warnung, die immer angeht, liest bald niemand mehr.
+        var letztesToken: Long? = null
         var laengsterAbstand = 0L
         // Wie viel der gefilterten Antwort schon ans Sprechen weitergegeben wurde.
         var gesprochen = 0
@@ -622,8 +633,10 @@ class ConversationOrchestrator(
                     // verteilt sechs Minuten Stillstand über tausend Token und macht daraus
                     // eine unauffällige Verlangsamung.
                     val jetzt = clock()
-                    val abstand = jetzt - letztesToken
-                    if (abstand > laengsterAbstand) laengsterAbstand = abstand
+                    letztesToken?.let { vorher ->
+                        val abstand = jetzt - vorher
+                        if (abstand > laengsterAbstand) laengsterAbstand = abstand
+                    }
                     letztesToken = jetzt
 
                     answer.append(chunk.text)
@@ -735,6 +748,25 @@ class ConversationOrchestrator(
          */
         registry: ToolRegistry,
         /**
+         * Dieselbe Zusammenstellung, aber jederzeit neu erfragbar.
+         *
+         * **Der Fehler, den das behebt, ist derselbe wie beim Container — eine Ebene
+         * tiefer.** Ein Werkzeug wird nur angeboten, wenn es gerade gelingen kann;
+         * `app-bauen` also erst, wenn ein Manifest im Projekt liegt. Geprüft wurde das aber
+         * einmal, vor der ersten Runde.
+         *
+         * Auf dem Gerät sah das so aus: Runde 1 scheiterte am Paketnamen, Runde 2 legte das
+         * Projekt an — und Runde 3 rief `fertig`, ohne zu bauen. `app-bauen` stand nicht zur
+         * Wahl, weil beim Zusammenstellen noch kein Manifest da war. Die Kette hatte die
+         * Voraussetzung für ihren zweiten Schritt gerade selbst geschaffen und durfte ihn
+         * trotzdem nicht tun.
+         *
+         * Genau darum geht es bei einer Kette: Jede Runde verändert den Zustand, auf den die
+         * nächste sich stützt. Eine Werkzeugliste, die diesen Zustand einmal am Anfang liest,
+         * ist für Ketten unbrauchbar.
+         */
+        werkzeugeJetzt: () -> ToolRegistry?,
+        /**
          * Wie viele Werkzeuge Neon für diesen Auftrag hintereinander benutzen darf.
          *
          * **Eins war zu wenig, und zwar sichtbar.** Auf „mach mir eine Zähler-App und
@@ -778,14 +810,20 @@ class ConversationOrchestrator(
             //
             // Ein Modell wählt, was dasteht. Also darf in Runde eins nicht dastehen, was
             // dort nicht hingehört.
+            val aktuell = werkzeugeJetzt() ?: registry
             val runFuerDieseRunde =
-                if (runde == 1) registry.ohne(Fertig.NAME) else registry
+                if (runde == 1) aktuell.ohne(Fertig.NAME) else aktuell
 
             val raw = StringBuilder()
             var tokens = 0
             var failure: String? = null
             var failureDetail: String? = null
-            var letztesToken = clock()
+            // **Erst ab dem ersten Token.** Vor ihm liegt die Verarbeitung des Prompts,
+            // und die dauert legitim lange: Auf dem Gerät waren es 9,3 Sekunden für 540
+            // Token. Als Abstand gezählt ergab das in jeder Runde die Meldung „Stillstand:
+            // 9 s" — für ganz gewöhnliche Rechenarbeit. `null` heißt: Es kam noch nichts,
+            // also gibt es auch keinen Abstand zu messen.
+            var letztesToken: Long? = null
 
             engine.generate(
                 GenerationRequest(
@@ -824,8 +862,10 @@ class ConversationOrchestrator(
                     is GenerationChunk.Token -> {
                         tokens++
                         val jetzt = clock()
-                        val abstand = jetzt - letztesToken
-                        if (abstand > laengsterAbstandKette) laengsterAbstandKette = abstand
+                        letztesToken?.let { vorher ->
+                            val abstand = jetzt - vorher
+                            if (abstand > laengsterAbstandKette) laengsterAbstandKette = abstand
+                        }
                         letztesToken = jetzt
                         raw.append(chunk.text)
                     }
@@ -877,7 +917,9 @@ class ConversationOrchestrator(
             letztesWerkzeug = call.name
 
             if (call.name == Fertig.NAME) {
-                val abschluss = registry.execute(call)
+                // Gegen die Liste **dieser Runde**, nicht gegen die vom Anfang. Sonst hört
+                // die Ausführung ein Werkzeug nicht, das die Grammatik gerade angeboten hat.
+                val abschluss = runFuerDieseRunde.execute(call)
                 val satz = when (abschluss) {
                     is ToolResult.Ok -> abschluss.spoken
                     is ToolResult.Failed -> abschluss.spoken
@@ -902,7 +944,12 @@ class ConversationOrchestrator(
             }
 
             val vorAusfuehrung = clock()
-            val result = registry.execute(call)
+            // **Auch die Ausführung braucht die Liste dieser Runde.** Hier stand
+            // `registry` — der Stand vom Anfang des Durchgangs. Damit bot die Grammatik in
+            // Runde 2 `app-bauen` an, das Modell wählte es, und die Ausführung antwortete
+            // „unbekanntes Werkzeug: app-bauen". Die halbe Behebung ist hier schlimmer als
+            // gar keine: Vorher fehlte das Werkzeug wenigstens sichtbar.
+            val result = runFuerDieseRunde.execute(call)
             val ausgefuehrt = clock() - vorAusfuehrung
 
             // **Jeder Werkzeugaufruf hinterlässt eine Zeile.** Hier stand keine, und deshalb

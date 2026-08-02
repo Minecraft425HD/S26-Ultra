@@ -68,8 +68,17 @@ class WerkzeugketteTest {
         override fun close() = Unit
     }
 
-    /** Gibt der Reihe nach aus, was ihr vorgelegt wurde; danach immer das Letzte. */
-    private class SkriptEngine(private val ausgaben: List<String>) : InferenceEngine {
+    /**
+     * Gibt der Reihe nach aus, was ihr vorgelegt wurde; danach immer das Letzte.
+     *
+     * @param werkzeugeSichtbar wird vor jeder Erzeugung mit den angebotenen Werkzeugnamen
+     *   gerufen. Damit lässt sich prüfen, **wann** ein Werkzeug zur Wahl stand — und nicht
+     *   nur, ob es am Ende aufgerufen wurde.
+     */
+    private class SkriptEngine(
+        private val ausgaben: List<String>,
+        private val werkzeugeSichtbar: (String) -> Unit = {},
+    ) : InferenceEngine {
         override var loadedModelId: String? = null
             private set
         var aufrufe = 0
@@ -83,8 +92,10 @@ class WerkzeugketteTest {
         override suspend fun unload() { loadedModelId = null }
 
         override fun generate(request: GenerationRequest): Flow<GenerationChunk> = flow {
-            prompts += request.messages.joinToString("\n") { "${it.role}: ${it.content}" } +
+            val prompt = request.messages.joinToString("\n") { "${it.role}: ${it.content}" } +
                 "\nGRAMMATIK: " + request.grammar.orEmpty()
+            prompts += prompt
+            werkzeugeSichtbar(prompt)
             val ausgabe = ausgaben.getOrElse(aufrufe) { ausgaben.last() }
             aufrufe++
             emit(GenerationChunk.Token(ausgabe))
@@ -95,6 +106,9 @@ class WerkzeugketteTest {
     private class NotierendesWerkzeug(name: String, private val antwort: String) : Tool {
         var aufrufe = 0
 
+        /** Damit ein Werkzeug die Welt verändern kann, so wie `app-anlegen` es tut. */
+        var beiAufruf: (() -> Unit)? = null
+
         override val spec = ToolSpec(
             name = name,
             description = "Attrappe $name",
@@ -103,6 +117,7 @@ class WerkzeugketteTest {
 
         override suspend fun execute(arguments: Map<String, String>): ToolResult {
             aufrufe++
+            beiAufruf?.invoke()
             return ToolResult.Ok(antwort)
         }
     }
@@ -292,6 +307,81 @@ class WerkzeugketteTest {
         assertTrue(
             protokoll.any { "Rundengrenze" in it },
             "das Ende an der Grenze steht nicht im Protokoll: $protokoll",
+        )
+    }
+
+    @Test
+    fun `ein Werkzeug, das erst durch die Kette moeglich wird, steht danach zur Wahl`() = runTest {
+        // **Der Fehler, den das Gerät vorgeführt hat.** Ein Werkzeug wird nur angeboten, wenn
+        // es gerade gelingen kann — `app-bauen` also erst, wenn ein Manifest im Projekt liegt.
+        // Geprüft wurde das aber einmal, vor der ersten Runde.
+        //
+        // Im Protokoll: Runde 1 scheiterte am Paketnamen, Runde 2 legte das Projekt an, und
+        // Runde 3 rief `fertig` — ohne zu bauen. `app-bauen` stand nicht zur Wahl, weil beim
+        // Zusammenstellen noch kein Manifest da war. Die Kette hatte die Voraussetzung für
+        // ihren zweiten Schritt gerade selbst geschaffen und durfte ihn trotzdem nicht tun.
+        val anlegen = NotierendesWerkzeug("app-anlegen", "Projekt angelegt.")
+        val bauen = NotierendesWerkzeug("app-bauen", "Die App ist gebaut.")
+        val protokoll = mutableListOf<String>()
+
+        // Die Welt: `app-bauen` gibt es erst, nachdem `app-anlegen` gelaufen ist.
+        var projektDa = false
+        val werkzeugeJetzt = {
+            ToolRegistry(
+                buildList {
+                    add(anlegen)
+                    if (projektDa) add(bauen)
+                    add(Fertig())
+                }
+            )
+        }
+
+        val engine = SkriptEngine(
+            listOf(
+                ruf("app-anlegen", "de.neon.zaehler"),
+                ruf("app-bauen", "los"),
+                """{"werkzeug":"fertig","argumente":{"zusammenfassung":"fertig"}}""",
+            )
+        )
+        // Das Anlegen verändert die Welt — genau wie auf dem Gerät.
+        anlegen.beiAufruf = { projektDa = true }
+
+        val lifecycle = ModelLifecycleManager(
+            engine = engine,
+            resolver = ModelFileResolver { File("/dev/null") },
+            memoryBudgetBytes = { 16L * 1024 * 1024 * 1024 },
+        )
+        ConversationOrchestrator(
+            router = Router(
+                registry,
+                SelectionPolicy(registry),
+                routerLlm = RouterLlm {
+                    RouteAnalysis(
+                        category = TaskCategory.CODE,
+                        complexity = 2,
+                        confidence = 0.9,
+                        source = AnalysisSource.ROUTER_LLM,
+                    )
+                },
+            ),
+            asr = FakeAsr("leg das projekt an und bau es"),
+            tts = FakeTts(),
+            lifecycle = lifecycle,
+            engine = engine,
+            deviceState = { DeviceState.unknown() },
+            actionExecutor = { null },
+            outcomeStore = InMemoryRouteOutcomeStore(),
+            clock = { 0L },
+            codeTools = werkzeugeJetzt,
+            log = { protokoll += it },
+        ).handleUtterance(samples)
+
+        assertEquals(1, anlegen.aufrufe, "das Projekt wurde nicht angelegt")
+        assertEquals(
+            1,
+            bauen.aufrufe,
+            "app-bauen kam nie zum Zug — die Werkzeugliste ist wieder eingefroren:\n" +
+                protokoll.joinToString("\n"),
         )
     }
 
