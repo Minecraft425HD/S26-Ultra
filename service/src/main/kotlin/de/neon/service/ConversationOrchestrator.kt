@@ -762,6 +762,11 @@ class ConversationOrchestrator(
         val gesprochenes = mutableListOf<String>()
         var tokensGesamt = 0
         var letztesWerkzeug: String? = null
+        // Auch hier, aus demselben Grund wie im Antwortpfad: Am Gerät blieb eine Erzeugung
+        // sechseinhalb Minuten stehen. Eine Kette darf vier Runden lang laufen, und ein
+        // Stillstand darin wäre noch schwerer zuzuordnen als in einer einzelnen Antwort —
+        // von außen sähe er aus wie ein besonders langsamer Bauvorgang.
+        var laengsterAbstandKette = 0L
 
         for (runde in 1..rundenGrenze) {
             // **In Runde eins gibt es kein `fertig`.** Man kann nicht fertig sein, bevor
@@ -780,6 +785,7 @@ class ConversationOrchestrator(
             var tokens = 0
             var failure: String? = null
             var failureDetail: String? = null
+            var letztesToken = clock()
 
             engine.generate(
                 GenerationRequest(
@@ -817,6 +823,10 @@ class ConversationOrchestrator(
                 when (chunk) {
                     is GenerationChunk.Token -> {
                         tokens++
+                        val jetzt = clock()
+                        val abstand = jetzt - letztesToken
+                        if (abstand > laengsterAbstandKette) laengsterAbstandKette = abstand
+                        letztesToken = jetzt
                         raw.append(chunk.text)
                     }
 
@@ -872,7 +882,10 @@ class ConversationOrchestrator(
                     is ToolResult.Ok -> abschluss.spoken
                     is ToolResult.Failed -> abschluss.spoken
                 }
-                log("Werkzeugkette beendet nach $runde Runde(n) — $tokensGesamt Token")
+                log(
+                    "Werkzeugkette beendet nach $runde Runde(n) — $tokensGesamt Token" +
+                        stillstand(laengsterAbstandKette)
+                )
                 say(satz)
                 gesprochenes += satz
                 break
@@ -907,6 +920,7 @@ class ConversationOrchestrator(
             log(
                 "Runde $runde von $rundenGrenze: Werkzeug ${call.name} $ergebnis — " +
                     "$ausgefuehrt ms, ${selection.model.id}, $tokens Token für den Aufruf" +
+                    stillstand(laengsterAbstandKette) +
                     call.arguments.entries.joinToString("") { (name, wert) ->
                         " · $name=${wert.gekuerzt(ARGUMENT_IM_PROTOKOLL)}"
                     }
