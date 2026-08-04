@@ -128,6 +128,50 @@ class WorkspaceTools(private val workspace: Workspace) {
     }
 
     /**
+     * Legt etwas in den Papierkorb.
+     *
+     * Die Antwort sagt ausdrücklich, dass nichts vernichtet wurde. Das ist keine Beschönigung,
+     * sondern eine Auskunft: Wer hört „gelöscht", sucht nicht weiter; wer hört „im
+     * Papierkorb", weiß, dass ein Fehlgriff behebbar ist.
+     */
+    fun loesche(pfad: String): Ergebnis {
+        if (workspace.datei(pfad) == null) return draussen(pfad)
+        val ablage = workspace.loesche(pfad)
+            ?: return Ergebnis(false, "„$pfad\" gibt es nicht.", "nicht vorhanden")
+
+        return Ergebnis(true, "$pfad liegt jetzt im Papierkorb.", "nach $ablage")
+    }
+
+    /**
+     * Verschiebt oder benennt um.
+     *
+     * Ein Werkzeug für beides, weil es dasselbe ist. Die Fehlermeldungen unterscheiden die
+     * Fälle trotzdem: Ein Modell, das nur „ging nicht" hört, versucht es unverändert noch
+     * einmal.
+     */
+    fun verschiebe(von: String, nach: String): Ergebnis {
+        if (workspace.datei(von) == null) return draussen(von)
+        if (workspace.datei(nach) == null) return draussen(nach)
+
+        val quelle = workspace.datei(von)
+        if (quelle?.exists() != true) {
+            return Ergebnis(false, "„$von\" gibt es nicht.", "Quelle fehlt")
+        }
+        if (workspace.datei(nach)?.exists() == true) {
+            return Ergebnis(
+                false,
+                "„$nach\" gibt es schon. Ich überschreibe nichts — nimm einen anderen Namen " +
+                    "oder lösche das Vorhandene zuerst.",
+                "Ziel belegt",
+            )
+        }
+
+        val neu = workspace.verschiebe(von, nach)
+            ?: return Ergebnis(false, "Das Verschieben hat nicht geklappt.", "unbekannter Fehler")
+        return Ergebnis(true, "$von heißt jetzt $neu.")
+    }
+
+    /**
      * Immer derselbe Satz, wenn ein Pfad aus allen erlaubten Orten hinausführt.
      *
      * **Mit der Aufzählung der erlaubten Orte.** Vorher stand hier nur „außerhalb des

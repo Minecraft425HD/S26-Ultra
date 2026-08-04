@@ -243,15 +243,54 @@ class MainActivity : ComponentActivity() {
                             var zeigeEditor by remember { mutableStateOf(false) }
 
                             if (zeigeEditor) {
-                                // Die Dateiliste bei jedem Aufbau neu lesen: Neon legt
-                                // Dateien während des Gesprächs an, und eine Liste, die das
-                                // erst nach einem Neustart zeigt, wäre irreführend.
+                                // Ein Zähler, der jede Änderung am Projektbereich zu einem
+                                // neuen Aufbau macht. Projekt- und Dateiliste kommen aus dem
+                                // Dateisystem und sind kein beobachtbarer Zustand — ohne
+                                // diesen Anstoß bliebe ein angelegtes Projekt unsichtbar,
+                                // bis man den Bildschirm verlässt und wieder öffnet.
+                                var stand by remember { mutableStateOf(0) }
+                                val bereich = ready.projektbereich
+
+                                // Die Listen bei jedem Aufbau neu lesen: Neon legt Dateien
+                                // während des Gesprächs an, und eine Liste, die das erst nach
+                                // einem Neustart zeigt, wäre irreführend.
+                                @Suppress("UNUSED_EXPRESSION") stand
                                 EditorScreen(
+                                    projekte = bereich.projekte().map { it.name },
+                                    aktivesProjekt = bereich.aktiv()?.name,
+                                    onProjektWaehlen = { name ->
+                                        bereich.waehle(name)
+                                        stand++
+                                    },
+                                    onProjektAnlegen = { wunsch ->
+                                        bereich.anlegen(wunsch)?.name?.also { stand++ }
+                                    },
+                                    onProjektWegraeumen = { name ->
+                                        bereich.inDenPapierkorb(name)
+                                        stand++
+                                    },
                                     dateien = ready.workspace.dateien(),
                                     lies = { pfad -> ready.workspace.lies(pfad) },
                                     speichere = { pfad, inhalt ->
                                         ready.workspace.schreib(pfad, inhalt)
+                                        stand++
                                     },
+                                    onDateiWegraeumen = { pfad ->
+                                        (ready.workspace.loesche(pfad) != null).also { stand++ }
+                                    },
+                                    onDateiUmbenennen = { von, nach ->
+                                        (ready.workspace.verschiebe(von, nach) != null)
+                                            .also { stand++ }
+                                    },
+                                    onBauen = if (ready.kannBauen()) {
+                                        {
+                                            val ergebnis = ready.baueAktivesProjekt()
+                                            stand++
+                                            if (ergebnis.gelungen) ergebnis.bericht
+                                            else "Beim Schritt „${ergebnis.schritt}\" ging es " +
+                                                "schief:\n${ergebnis.bericht}"
+                                        }
+                                    } else null,
                                     frage = { frage, auswahl ->
                                         // Zurück in den Chat: Dort steht die Antwort, dort
                                         // steht der Verlauf, und dort sieht man, dass etwas

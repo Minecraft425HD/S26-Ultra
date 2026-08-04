@@ -2,6 +2,7 @@ package de.neon.tools
 
 import de.neon.workspace.AndroidBuild
 import de.neon.workspace.AndroidProjectTemplate
+import de.neon.workspace.Projektbereich
 import de.neon.workspace.PythonRuntime
 import de.neon.workspace.Workspace
 import de.neon.workspace.WorkspaceTools
@@ -29,6 +30,11 @@ object WorkspaceToolset {
      *   Ein Modell, dem ein Werkzeug angeboten wird, benutzt es.
      */
     fun alle(
+        /**
+         * Der Projektbereich. `null` nur in Tests, die sich für Projekte nicht interessieren
+         * — dann gibt es die Projektwerkzeuge nicht und `workspace` ist der einzige Ort.
+         */
+        bereich: Projektbereich? = null,
         workspace: Workspace,
         python: PythonRuntime? = null,
         /**
@@ -54,6 +60,13 @@ object WorkspaceToolset {
         val gibtOrte = workspace.erlaubteWurzeln().size > 1
 
         add(DateiSchreiben(tools))
+        if (gibtDateien) {
+            // Beide setzen voraus, dass es etwas zu bewegen gibt. In einem leeren Projekt
+            // könnten sie nur scheitern — und ein Modell, dem `datei-loeschen` angeboten
+            // wird, benutzt es irgendwann.
+            add(DateiVerschieben(tools))
+            add(DateiLoeschen(tools))
+        }
         if (gibtDateien || gibtOrte) {
             add(DateiLesen(tools))
             add(OrdnerAnsehen(tools))
@@ -63,8 +76,20 @@ object WorkspaceToolset {
             add(DateienAuflisten(tools))
         }
         if (python != null) add(PythonAusfuehren(workspace, python))
+
+        if (bereich != null) {
+            val projekte = bereich.projekte()
+            add(ProjektAnlegen(bereich))
+            // Löschen gibt es, sobald es etwas zu löschen gibt; Auflisten und Wechseln erst
+            // ab zwei. Siehe ProjektWerkzeuge.alle — dort steht, warum die Grenze für die
+            // drei Werkzeuge nicht dieselbe ist.
+            if (projekte.isNotEmpty()) {
+                addAll(ProjektWerkzeuge.alle(bereich, mehrere = projekte.size > 1))
+            }
+        }
+
         if (build != null) {
-            add(AppAnlegen(workspace))
+            if (bereich != null) add(AppAnlegenImProjekt(bereich)) else add(AppAnlegen(workspace))
             // Bauen setzt ein Manifest voraus. Ohne eines antwortete dieses Werkzeug bisher
             // „Es gibt noch kein Android-Projekt" — eine halbe Minute Erzeugungszeit für
             // eine Auskunft, die schon vor dem Aufruf feststand.
@@ -171,6 +196,43 @@ private class DateiAendern(private val tools: WorkspaceTools) : Tool {
         arguments["alt"].orEmpty(),
         arguments["neu"].orEmpty(),
     ).alsToolResult()
+}
+
+private class DateiVerschieben(private val tools: WorkspaceTools) : Tool {
+    override val spec = ToolSpec(
+        name = "datei-verschieben",
+        description = "Verschiebt eine Datei oder benennt sie um. Überschreibt nichts.",
+        parameters = listOf(
+            ToolParameter("von", ParameterType.STRING, "Bisheriger Pfad"),
+            ToolParameter("nach", ParameterType.STRING, "Neuer Pfad"),
+        ),
+    )
+
+    override suspend fun execute(arguments: Map<String, String>): ToolResult =
+        tools.verschiebe(arguments["von"].orEmpty(), arguments["nach"].orEmpty())
+            .alsToolResult()
+}
+
+/**
+ * Legt eine Datei in den Papierkorb.
+ *
+ * Die Beschreibung sagt ausdrücklich, dass nichts vernichtet wird. Das ist kein Trost für den
+ * Nutzer, sondern eine Angabe für das Modell: Ein Werkzeug, das als endgültig beschrieben ist,
+ * wird zögerlicher benutzt als eines, dessen Wirkung sich zurücknehmen lässt — und Zögern an
+ * der falschen Stelle heißt, dass Neon Müll liegen lässt.
+ */
+private class DateiLoeschen(private val tools: WorkspaceTools) : Tool {
+    override val spec = ToolSpec(
+        name = "datei-loeschen",
+        description = "Legt eine Datei oder einen Ordner in den Papierkorb. Nichts wird " +
+            "vernichtet — es lässt sich zurückholen.",
+        parameters = listOf(
+            ToolParameter("pfad", ParameterType.STRING, "Pfad im Projekt"),
+        ),
+    )
+
+    override suspend fun execute(arguments: Map<String, String>): ToolResult =
+        tools.loesche(arguments["pfad"].orEmpty()).alsToolResult()
 }
 
 private class DateienAuflisten(private val tools: WorkspaceTools) : Tool {

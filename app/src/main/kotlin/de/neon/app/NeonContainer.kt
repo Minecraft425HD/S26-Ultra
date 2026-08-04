@@ -50,6 +50,7 @@ import de.neon.workspace.AndroidBuild
 import de.neon.workspace.BuildTools
 import de.neon.workspace.DalvikRunner
 import de.neon.workspace.ProcessCommandRunner
+import de.neon.workspace.Projektbereich
 import de.neon.workspace.PythonRuntime
 import de.neon.workspace.Workspace
 import de.neon.tools.ComposeMessageTool
@@ -61,6 +62,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
@@ -294,22 +296,58 @@ class NeonContainer(context: Context) {
     )
 
     /**
-     * Das Projektverzeichnis, in dem Neon arbeiten darf — und nur darin.
+     * Der Behälter, in dem alle Projekte liegen.
      *
      * Unter `filesDir` und nicht im gemeinsamen Speicher: Was hier liegt, gehört der App,
-     * verschwindet beim Deinstallieren und ist von anderen Apps nicht lesbar. Die Grenze
-     * selbst zieht [Workspace]; sie ist dort ohne Android geprüft, weil die Pfade aus einem
-     * Sprachmodell kommen und daneben das Gedächtnis, der Anhang-Index und die Modelldateien
-     * liegen.
+     * verschwindet beim Deinstallieren und ist von anderen Apps nicht lesbar. Die Grenze um
+     * das einzelne Projekt zieht [Workspace]; sie ist dort ohne Android geprüft, weil die
+     * Pfade aus einem Sprachmodell kommen und daneben das Gedächtnis, der Anhang-Index und
+     * die Modelldateien liegen.
+     *
+     * **Hier war `files/projekt/` einmal das Projekt selbst.** Ein flacher Ordner mit einem
+     * Manifest darin — also genau eine App, kein Löschen, kein Verschieben. Wer ein zweites
+     * `app-anlegen` auslöste, überschrieb das Manifest des ersten und ließ dessen Quelltext
+     * verwaist zurück.
+     *
+     * Jetzt ist es ein Behälter, und jeder Unterordner darin ein Projekt. `Workspace` bleibt
+     * unverändert die Grenze **eines** Projekts und zeigt nur eine Ebene tiefer — deshalb
+     * arbeiten Ankeränderungen, Pfadprüfung und die fünfstufige Bau-Kette weiter, ohne dass
+     * eine Zeile davon angefasst werden musste.
      */
-    val workspace = Workspace(
+    val projektbereich = Projektbereich(
         wurzel = File(appContext.filesDir, "projekt"),
         // Bei jedem Zugriff neu gefragt statt beim Bauen eingefroren: Die Freigabe wird in
         // den Systemeinstellungen erteilt und kann dort jederzeit zurueckgenommen werden.
         // Eine gemerkte Liste hiesse, dass eine erteilte Freigabe erst nach einem Neustart
         // wirkt und eine entzogene gar nicht.
         weitereWurzeln = { Speicherfreigabe.wurzeln() },
-    )
+        // Das aktive Projekt überdauert einen Neustart. Ohne das stünde man nach jedem Start
+        // in einem anderen Projekt als dem, in dem man gearbeitet hat.
+        gemerkterName = { einstellungen.getString(SCHLUESSEL_PROJEKT, null) },
+        merkeName = { name ->
+            einstellungen.edit().putString(SCHLUESSEL_PROJEKT, name).apply()
+        },
+        log = { meldung -> NeonLog.i(TAG_IDE, meldung) },
+    ).also { bereich ->
+        // **Vorhandene Arbeit darf nicht aus der Ansicht verschwinden.** Bis zu dieser
+        // Fassung lagen Manifest und Quelltext direkt im Behälter; jetzt zählt nur noch,
+        // was in Unterordnern liegt. Wer die neue Fassung installiert, sähe ohne diesen
+        // Umzug ein leeres Projektverzeichnis und müsste glauben, seine Dateien seien weg.
+        //
+        // Vor allem anderen und nicht im Hintergrund: Der Getter unten legt sonst ein
+        // Standardprojekt neben die losen Dateien, und danach ist der Umzug mehrdeutig.
+        runCatching { bereich.holeAltesProjektHerein() }
+            .onFailure { NeonLog.e(TAG_IDE, "Umzug der alten Ablage scheiterte", it) }
+    }
+
+    /**
+     * Der Arbeitsbereich des **aktiven** Projekts.
+     *
+     * Ein Getter und kein Wert: Das aktive Projekt wechselt im Gespräch, und ein einmal
+     * gemerkter Arbeitsbereich zeigte danach auf den falschen Ordner. Dasselbe Muster wie bei
+     * den Werkzeuglisten, und aus demselben Grund.
+     */
+    val workspace: Workspace get() = projektbereich.aktiverArbeitsbereich()
 
     /**
      * Die Python-Umgebung.
@@ -368,7 +406,34 @@ class NeonContainer(context: Context) {
      * enthält: `datei-schreiben` neben `termin` zu stellen heißt, dass ein 4-B-Modell bei
      * einer Wissensfrage gelegentlich eine Datei anlegt.
      */
-    private val codeTools get() = ToolRegistry(WorkspaceToolset.alle(workspace, python, build))
+    private val codeTools get() = ToolRegistry(
+        WorkspaceToolset.alle(projektbereich, workspace, python, build),
+        kopfzeile = projektKopfzeile(),
+    )
+
+    /**
+     * Der Satz, der dem Modell sagt, wo es gerade steht.
+     *
+     * **Ohne ihn schreibt Neon in ein Projekt, das es nicht benennen kann.** Alle Pfade sind
+     * relativ zum aktiven Projekt; welches das ist, stand nirgends. Damit gab es auch keinen
+     * Anlass, `projekt-wechseln` zu benutzen — ein Werkzeug, dessen Voraussetzung im Prompt
+     * fehlt, wird nicht gewählt.
+     *
+     * Die anderen Projekte werden nur genannt, wenn es welche gibt. Eine Aufzählung mit einem
+     * Eintrag ist kein Hinweis, sondern zwölf Token Wartezeit.
+     */
+    private fun projektKopfzeile(): String {
+        val alle = projektbereich.projekte()
+        val aktiv = projektbereich.aktiv()?.name ?: return ""
+
+        return buildString {
+            append("Aktives Projekt: $aktiv. Alle Dateipfade beziehen sich darauf.")
+            val andere = alle.map { it.name }.filter { it != aktiv }
+            if (andere.isNotEmpty()) {
+                append(" Daneben gibt es: ").append(andere.joinToString(", ")).append(".")
+            }
+        }
+    }
 
     /**
      * Die zuletzt gebaute APK, falls es eine gibt.
@@ -381,6 +446,49 @@ class NeonContainer(context: Context) {
         File(workspace.wurzel, de.neon.workspace.AndroidBuild.BAU_VERZEICHNIS)
             .listFiles { f -> f.extension == "apk" && !f.name.startsWith("unsigniert") }
             ?.maxByOrNull { it.lastModified() }
+
+    /**
+     * Ob das aktive Projekt gebaut werden kann: Bau-Kette ausgepackt und ein Manifest da.
+     *
+     * Danach richtet sich, ob der Knopf im Editor überhaupt erscheint. Ein Knopf, der jedes
+     * Mal „es gibt kein Android-Projekt" antwortet, ist schlechter als keiner.
+     */
+    fun kannBauen(): Boolean = build != null && projektbereich.aktiv()?.istAndroidProjekt == true
+
+    /**
+     * Baut das aktive Projekt — ohne Umweg über das Sprachmodell.
+     *
+     * **Warum es diesen Weg neben `app-bauen` gibt.** Über das Gespräch kostet ein Bauvorgang
+     * erst eine Einordnung, dann eine Erzeugung von rund vierzig Token, dann den Bau selbst —
+     * bei zwölf Token je Sekunde eine halbe Minute Vorlauf für eine Handlung, die keinerlei
+     * Entscheidung braucht. Wer im Projektordner steht und bauen will, weiß schon, was er
+     * will; das Modell dazwischenzuschalten fügt nur Wartezeit und die Möglichkeit hinzu,
+     * dass es etwas anderes tut.
+     *
+     * Läuft auf [Dispatchers.IO]: Der Kotlin-Compiler braucht auf diesem Gerät eine Minute,
+     * und der gehört nicht auf den Hauptfaden.
+     */
+    suspend fun baueAktivesProjekt(): de.neon.workspace.BuildResult =
+        withContext(Dispatchers.IO) {
+            val kette = build ?: return@withContext de.neon.workspace.BuildResult(
+                gelungen = false,
+                apk = null,
+                bericht = "Die Bau-Werkzeuge sind noch nicht ausgepackt. Das läuft beim " +
+                    "ersten Start und dauert einen Moment.",
+                schritt = "Vorbereitung",
+            )
+            val projekt = projektbereich.aktiv()
+            val paket = projekt?.paketname() ?: return@withContext de.neon.workspace.BuildResult(
+                gelungen = false,
+                apk = null,
+                bericht = "In diesem Projekt liegt kein AndroidManifest.xml. Bitte Neon im " +
+                    "Chat, eine App anzulegen.",
+                schritt = "Vorbereitung",
+            )
+
+            NeonLog.i(TAG_IDE, "Bau von Hand angestoßen: ${projekt.name} ($paket)")
+            kette.baue(projektbereich.arbeitsbereich(projekt), paket)
+        }
 
     /**
      * Die Bau-Kette für Android-Apps.
@@ -744,6 +852,9 @@ class NeonContainer(context: Context) {
          */
         const val TAG_IDE = "NeonIDE"
         const val SCHLUESSEL_KONTEXT = "kontextfenster"
+
+        /** In welchem Projekt zuletzt gearbeitet wurde. */
+        const val SCHLUESSEL_PROJEKT = "aktives-projekt"
     }
 
     /** Ersatz, solange das VAD-Modell fehlt: lässt alles durch. */

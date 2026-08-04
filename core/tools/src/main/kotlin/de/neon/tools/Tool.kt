@@ -73,7 +73,19 @@ data class ToolCall(
  * Function-Calling, geben aber mit erzwungener Grammatik trotzdem gültige Aufrufe aus. Damit
  * werden Werkzeuge auch für ein 4B-Modell benutzbar.
  */
-class ToolRegistry(tools: List<Tool>) {
+class ToolRegistry(
+    tools: List<Tool>,
+    /**
+     * Eine Zeile vor der Werkzeugliste, die sagt, worauf sich die Werkzeuge beziehen.
+     *
+     * **Wozu.** Alle Dateipfade sind relativ zum aktiven Projekt. Welches das ist, stand
+     * nirgends — das Modell schrieb also in ein Projekt, das es nicht benennen konnte, und
+     * hatte keinen Anlass, `projekt-wechseln` zu benutzen. Eine Zeile ist der billigste Weg,
+     * das zu beheben; die Alternative wäre ein Projektparameter an jedem einzelnen Werkzeug,
+     * und den setzt ein 4-B-Modell bei sieben Werkzeugen irgendwann falsch.
+     */
+    private val kopfzeile: String? = null,
+) {
 
     private val byName: Map<String, Tool> = tools.associateBy { it.spec.name }
 
@@ -109,8 +121,10 @@ class ToolRegistry(tools: List<Tool>) {
      * Ein Modell wählt, was dasteht. Also darf in Runde 1 nicht dastehen, was dort nicht
      * hingehört.
      */
-    fun ohne(vararg namen: String): ToolRegistry =
-        ToolRegistry(specs.mapNotNull { byName[it.name] }.filter { it.spec.name !in namen })
+    fun ohne(vararg namen: String): ToolRegistry = ToolRegistry(
+        specs.mapNotNull { byName[it.name] }.filter { it.spec.name !in namen },
+        kopfzeile,
+    )
 
     suspend fun execute(call: ToolCall): ToolResult {
         val tool = byName[call.name]
@@ -151,6 +165,7 @@ class ToolRegistry(tools: List<Tool>) {
      * dass eine Auskunft verlorengeht.
      */
     fun promptDescription(): String = buildString {
+        kopfzeile?.takeIf { it.isNotBlank() }?.let { appendLine(it) }
         appendLine("Verfügbare Werkzeuge:")
         for (spec in specs) {
             append("- ").append(spec.name).append(": ").append(spec.description)

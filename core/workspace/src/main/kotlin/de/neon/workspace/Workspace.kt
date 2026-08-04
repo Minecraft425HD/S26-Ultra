@@ -33,6 +33,18 @@ class Workspace(
      * Erlaubnis.
      */
     private val weitereWurzeln: () -> List<File> = { emptyList() },
+    /**
+     * Wohin gelöschte Dateien wandern. `null` heißt: wirklich löschen.
+     *
+     * **Warum es einen Papierkorb gibt und kein `delete`.** Die Pfade kommen aus einem
+     * Sprachmodell. Ein Modell, das `datei-loeschen` mit dem falschen Namen aufruft, tut das
+     * nicht aus Bosheit — es hat sich verlesen. Ohne Papierkorb ist der Schaden endgültig,
+     * mit Papierkorb ist er lästig. Der Unterschied kostet eine Verschiebung.
+     *
+     * Der Ort liegt **außerhalb** des Projekts, sonst tauchte das Gelöschte in [dateien]
+     * wieder auf und das Modell arbeitete damit weiter.
+     */
+    private val papierkorb: File? = null,
 ) {
 
     /** Das Projektverzeichnis, aufgelöst. Der Ort, auf den sich relative Pfade beziehen. */
@@ -120,6 +132,59 @@ class Workspace(
     }
 
     /**
+     * Verschiebt oder benennt um.
+     *
+     * Beides ist derselbe Vorgang, und beides fehlte. Wer eine Datei an die richtige Stelle
+     * legen will, musste sie bisher neu schreiben und die alte stehen lassen — im Projekt
+     * blieb dann eine Leiche, die das Modell beim nächsten Auflisten wieder mitliest.
+     *
+     * @return der neue Pfad, oder `null`, wenn eine der beiden Seiten hinausführt oder die
+     *   Quelle fehlt.
+     */
+    fun verschiebe(von: String, nach: String): String? {
+        val quelle = datei(von)?.takeIf { it.exists() } ?: return null
+        val ziel = datei(nach) ?: return null
+        if (quelle == ziel) return relativ(ziel)
+        // Kein Überschreiben. Ein Modell, das zwei Dateien auf denselben Namen schiebt,
+        // verlöre sonst eine davon — und zwar stillschweigend.
+        if (ziel.exists()) return null
+
+        ziel.parentFile?.mkdirs()
+        if (!quelle.renameTo(ziel)) {
+            // `renameTo` scheitert über Dateisystemgrenzen hinweg. Dann kopieren und die
+            // Quelle erst danach entfernen: Ein Abbruch dazwischen lässt die Datei zweimal
+            // liegen, ein Abbruch andersherum ließe sie nirgends liegen.
+            runCatching { quelle.copyRecursively(ziel, overwrite = false) }.getOrElse {
+                return null
+            }
+            quelle.deleteRecursively()
+        }
+        return relativ(ziel)
+    }
+
+    /**
+     * Legt eine Datei oder einen Ordner in den Papierkorb — oder löscht, wenn keiner da ist.
+     *
+     * @return der Pfad, unter dem es jetzt im Papierkorb liegt, oder `null` bei Fehlschlag.
+     */
+    fun loesche(pfad: String, zeitstempel: Long = System.currentTimeMillis()): String? {
+        val ziel = datei(pfad)?.takeIf { it.exists() } ?: return null
+        val korb = papierkorb ?: return if (ziel.deleteRecursively()) "gelöscht" else null
+
+        // Der Zeitstempel im Namen macht die Ablage eindeutig: Wer dieselbe Datei zweimal
+        // löscht, soll nicht die erste Fassung verlieren.
+        val ablage = File(korb, "$zeitstempel-${ziel.name}")
+        ablage.parentFile?.mkdirs()
+        if (!ziel.renameTo(ablage)) {
+            runCatching { ziel.copyRecursively(ablage, overwrite = true) }.getOrElse {
+                return null
+            }
+            ziel.deleteRecursively()
+        }
+        return ablage.absolutePath
+    }
+
+    /**
      * Alle Dateien des Projekts, projektrelativ, alphabetisch.
      *
      * Ausgelassen wird, was nicht zum Quelltext gehört: Versionsverwaltung, Bauverzeichnisse,
@@ -174,7 +239,7 @@ class Workspace(
         return false
     }
 
-    private companion object {
+    companion object {
         /**
          * Verzeichnisse, die kein Quelltext sind.
          *

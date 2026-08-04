@@ -4,6 +4,7 @@ import de.neon.workspace.AndroidBuild
 import de.neon.workspace.BuildTools
 import de.neon.workspace.CommandResult
 import de.neon.workspace.CommandRunner
+import de.neon.workspace.Projektbereich
 import de.neon.workspace.Workspace
 import java.io.File
 import kotlin.test.Test
@@ -32,7 +33,10 @@ class WerkzeugauswahlTest {
     )
 
     private fun namen(workspace: Workspace, mitBauKette: Boolean = false): Set<String> =
-        WorkspaceToolset.alle(workspace, build = if (mitBauKette) bauKette() else null)
+        WorkspaceToolset.alle(
+            workspace = workspace,
+            build = if (mitBauKette) bauKette() else null,
+        )
             .map { it.spec.name }
             .toSet()
 
@@ -109,11 +113,75 @@ class WerkzeugauswahlTest {
         assertTrue("app-bauen" in namen(ws, mitBauKette = true))
     }
 
+    /**
+     * **Löschen darf nicht an der Zahl der Projekte hängen.**
+     *
+     * Genau das war die Klage: „Ich kann nur ein Projekt haben, das die Erstellung weiterer
+     * verhindert, und ich kann auch nichts löschen." Ein Werkzeug, das erst ab zwei Projekten
+     * erscheint, hilft demjenigen nicht, der mit einem falsch angelegten dasteht.
+     */
+    @Test
+    fun `mit einem Projekt gibt es Loeschen, aber kein Wechseln`() {
+        val bereich = Projektbereich(
+            File.createTempFile("neon-bereich", "").apply { delete(); mkdirs(); deleteOnExit() }
+        )
+        bereich.anlegen("zaehler")
+
+        val namen = WorkspaceToolset
+            .alle(bereich, bereich.aktiverArbeitsbereich())
+            .map { it.spec.name }
+            .toSet()
+
+        assertTrue("projekt-anlegen" in namen, "ein zweites Projekt muss möglich sein")
+        assertTrue("projekt-loeschen" in namen)
+        assertFalse("projekt-wechseln" in namen, "es gibt nichts, wohin gewechselt würde")
+        assertFalse("projekte-auflisten" in namen, "die Liste steht schon im Prompt")
+    }
+
+    @Test
+    fun `ab zwei Projekten kommen Auflisten und Wechseln dazu`() {
+        val bereich = Projektbereich(
+            File.createTempFile("neon-bereich", "").apply { delete(); mkdirs(); deleteOnExit() }
+        )
+        bereich.anlegen("zaehler")
+        bereich.anlegen("notizen")
+
+        val namen = WorkspaceToolset
+            .alle(bereich, bereich.aktiverArbeitsbereich())
+            .map { it.spec.name }
+            .toSet()
+
+        assertTrue("projekt-wechseln" in namen)
+        assertTrue("projekte-auflisten" in namen)
+    }
+
+    /**
+     * Ohne Projekt gibt es nichts zu wechseln und nichts wegzuräumen.
+     *
+     * Der Fall tritt praktisch nie ein — `aktiverArbeitsbereich` legt eines an, sobald jemand
+     * eine Datei schreibt. Er steht hier, damit die Bedingung eine ist und nicht zwei: Die
+     * Werkzeuge hängen an der Zahl der Projekte, nicht daran, ob ein Bereich da ist.
+     */
+    @Test
+    fun `ohne Projekt gibt es nur das Anlegen`() {
+        val bereich = Projektbereich(
+            File.createTempFile("neon-bereich", "").apply { delete(); mkdirs(); deleteOnExit() }
+        )
+
+        val namen = WorkspaceToolset
+            .alle(bereich, Workspace(bereich.wurzel))
+            .map { it.spec.name }
+            .toSet()
+
+        assertTrue("projekt-anlegen" in namen)
+        assertFalse("projekt-loeschen" in namen)
+    }
+
     @Test
     fun `die Beschreibung nennt jedes Werkzeug in genau einer Zeile`() {
         val ws = leeresProjekt()
         ws.schreib("src/Main.kt", "fun main() {}")
-        val registry = ToolRegistry(WorkspaceToolset.alle(ws))
+        val registry = ToolRegistry(WorkspaceToolset.alle(workspace = ws))
 
         val zeilen = registry.promptDescription().trim().lines()
         assertEquals(
@@ -125,6 +193,28 @@ class WerkzeugauswahlTest {
         assertTrue(
             zeilen.any { "pfad" in it && "inhalt" in it },
             registry.promptDescription(),
+        )
+    }
+
+    /**
+     * **Das aktive Projekt gehört in den Prompt.**
+     *
+     * Alle Pfade beziehen sich darauf. Stand es nirgends, schrieb das Modell in ein Projekt,
+     * das es nicht benennen konnte — und hatte keinen Anlass, `projekt-wechseln` zu wählen.
+     * Ein Werkzeug, dessen Voraussetzung im Prompt fehlt, wird nicht benutzt.
+     */
+    @Test
+    fun `die Kopfzeile steht vor der Werkzeugliste und ueberlebt das Aussortieren`() {
+        val registry = ToolRegistry(
+            WorkspaceToolset.alle(workspace = leeresProjekt()),
+            kopfzeile = "Aktives Projekt: zaehler.",
+        )
+
+        assertTrue(registry.promptDescription().startsWith("Aktives Projekt: zaehler."))
+        // `ohne` baut die Zusammenstellung neu. Ginge die Kopfzeile dabei verloren, wüsste
+        // das Modell ausgerechnet in Runde 1 nicht, wo es steht.
+        assertTrue(
+            registry.ohne(Fertig.NAME).promptDescription().startsWith("Aktives Projekt:"),
         )
     }
 }
