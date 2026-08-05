@@ -152,6 +152,13 @@ class ConversationOrchestrator(
      * dann auch benutzbar.
      */
     private val codeTools: () -> ToolRegistry? = { null },
+    /**
+     * Ob im aktiven Projekt schon eine Android-App liegt.
+     *
+     * Nur für [Zielklaerung] gebraucht: Wer in einem Android-Projekt „schreib mir das noch
+     * dazu" sagt, meint dieses Projekt und soll nicht nach der Sprache gefragt werden.
+     */
+    private val projektIstAndroid: () -> Boolean = { false },
     /** Was Neon sich über den Nutzer gemerkt hat. */
     private val memory: MemoryRecall? = null,
     /**
@@ -250,6 +257,17 @@ class ConversationOrchestrator(
      */
     @Volatile
     private var turnHistory: List<ChatMessage> = emptyList()
+
+    /**
+     * Der Auftrag, zu dem Neon gerade eine Rückfrage gestellt hat.
+     *
+     * `null`, solange keine offen ist. Die nächste Äußerung wird damit zusammengesetzt und
+     * das Feld wieder geleert — auch dann, wenn die Antwort mit der Frage nichts zu tun hat.
+     * Das ist Absicht: Wer auf „Android oder Python?" mit „wie spät ist es" antwortet, hat
+     * das Thema gewechselt, und eine Frage, die drei Durchgänge lang nachhängt, ist
+     * schlimmer als eine, die verfällt.
+     */
+    private var offeneFrage: String? = null
 
     /**
      * Genau ein Durchgang zur Zeit.
@@ -388,21 +406,54 @@ class ConversationOrchestrator(
 
         append(ChatEntry(fromUser = true, text = text, timestampMillis = startedAt))
 
+        // **Die Antwort auf eine Rückfrage gehört zum ursprünglichen Auftrag.**
+        //
+        // Ohne das ist die Rückfrage schlimmer als nutzlos: Auf „Android" allein folgt eine
+        // neue Einordnung, und „Android" ist für sich genommen keine Programmieraufgabe —
+        // die Werkzeugkette liefe gar nicht erst an, und der Auftrag wäre verloren.
+        val offen = offeneFrage
+        offeneFrage = null
+        val auftrag = if (offen != null) {
+            Zielklaerung.zusammengefuegt(offen, text).also {
+                log("Rückfrage beantwortet, Auftrag wieder zusammengesetzt: $it")
+            }
+        } else {
+            text
+        }
+
+        // **Fragen, bevor irgendetwas erzeugt wird.**
+        //
+        // Nicht das Modell entscheidet das, sondern eine Regel — siehe [Zielklaerung]. Das
+        // Werkzeug `rueckfrage` gab es seit Tagen: an erster Stelle in der Liste, mit der
+        // Gabelung in der Beschreibung, mit derselben Regel im Systemprompt. Auf
+        // „programmiere eine QR-Generierungs-App" hat Neon trotzdem ungefragt ein
+        // Python-Skript geschrieben. Ein 1.7-B-Modell trifft diese Wahl nicht; man kann ihm
+        // anbieten zu fragen, sich darauf verlassen kann man nicht.
+        //
+        // Vor dem Routen, also **ohne eine einzige Erzeugung**: Die Frage ist ein fester
+        // Satz. Sie kostet keinen Serverstart, kein Token und keine Wartezeit.
+        if (offen == null && Zielklaerung.brauchtSprachfrage(auftrag, projektIstAndroid())) {
+            offeneFrage = auftrag
+            log("Rückfrage nach der Sprache: „$auftrag\"")
+            return@withLock rueckfrageBericht(Zielklaerung.FRAGE_SPRACHE, startedAt)
+        }
+
         // Vor dem Routen: Die neue Äußerung bewertet rückwirkend den vorherigen Durchgang.
         // Ein daraus gelerntes Beispiel kommt damit schon dieser Anfrage zugute.
-        learner?.onNewUtterance(text, clock())
+        learner?.onNewUtterance(auftrag, clock())
 
         _state.value = NeonState.ROUTING
         val utterance = Utterance(
-            text = text,
+            text = auftrag,
             hasImage = hasImage,
-            explicitDeepThinking = wantsDeeperAnswer(text),
+            explicitDeepThinking = wantsDeeperAnswer(auftrag),
         )
         val decision = router.route(utterance, deviceState())
 
         val report = when (decision) {
-            is RouteDecision.Direct -> handleDirect(decision, text, startedAt)
-            is RouteDecision.Generate -> handleGenerate(decision, utterance, text, startedAt, images)
+            is RouteDecision.Direct -> handleDirect(decision, auftrag, startedAt)
+            is RouteDecision.Generate ->
+                handleGenerate(decision, utterance, auftrag, startedAt, images)
         }
 
         append(
@@ -985,7 +1036,15 @@ class ConversationOrchestrator(
 
             // Eine Rückfrage ist das Ende der Kette, egal wie viele Runden noch offen wären:
             // Weiterzuarbeiten hieße, die eigene Frage zu übergehen.
-            if (call.name == Rueckfrage.NAME) break
+            //
+            // **Und der Auftrag wird gemerkt.** Ohne das war die Rückfrage des Modells
+            // genauso wertlos wie die feste: Auf „Android" allein folgt eine neue
+            // Einordnung, „Android" ist für sich keine Programmieraufgabe, und der
+            // ursprüngliche Auftrag wäre verloren. Derselbe Weg wie bei [Zielklaerung].
+            if (call.name == Rueckfrage.NAME) {
+                offeneFrage = utterance.text
+                break
+            }
 
             // Das Ergebnis zurück ins Gespräch. Der Aufruf als das, was Neon getan hat, das
             // Ergebnis als das, was dabei herauskam — zwei Nachrichten und nicht eine,
@@ -1106,6 +1165,25 @@ class ConversationOrchestrator(
             answer = message,
             modelId = null,
             routeReason = selection,
+            latencyMs = clock() - startedAt,
+            usedNoModel = true,
+        )
+    }
+
+    /**
+     * Die Rückfrage als fertiger Durchgang.
+     *
+     * `usedNoModel`, weil genau das der Punkt ist: Kein Serverstart, keine Erzeugung, kein
+     * Token. Die Frage steht als fester Satz im Code. Auf diesem Gerät ist das der
+     * Unterschied zwischen sofort und einer halben Minute.
+     */
+    private suspend fun rueckfrageBericht(frage: String, startedAt: Long): TurnReport {
+        say(frage)
+        return TurnReport(
+            transcript = frage,
+            answer = frage,
+            modelId = null,
+            routeReason = "Rückfrage vor dem Bauen",
             latencyMs = clock() - startedAt,
             usedNoModel = true,
         )

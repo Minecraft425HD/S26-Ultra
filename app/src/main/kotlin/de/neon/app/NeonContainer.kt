@@ -619,6 +619,9 @@ class NeonContainer(context: Context) {
         // stand „Bau-Kette bereit" — bereit war sie, angeboten wurde sie nie.
         tools = { tools },
         codeTools = { codeTools },
+        // Bei jedem Durchgang neu gefragt: Wer eben ein Android-Projekt angelegt hat, soll
+        // beim nächsten Satz nicht wieder nach der Sprache gefragt werden.
+        projektIstAndroid = { projektbereich.aktiv()?.istAndroidProjekt == true },
         memory = { query, limit ->
             runCatching { memory.recall(query, limit) }.getOrDefault(emptyList())
         },

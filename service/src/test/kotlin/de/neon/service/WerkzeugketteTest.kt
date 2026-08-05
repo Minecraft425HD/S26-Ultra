@@ -187,7 +187,7 @@ class WerkzeugketteTest {
         )
 
         aufbau(
-            "mach mir eine zaehler app und erstelle das projekt, danach direkt kompilieren",
+            "mach mir eine zaehler app fuer android und erstelle das projekt, danach direkt kompilieren",
             TaskCategory.CODE, engine, tts,
             listOf(anlegen, bauen, Fertig()),
             protokoll,
@@ -221,7 +221,7 @@ class WerkzeugketteTest {
         val engine = SkriptEngine(listOf(ruf("app-anlegen", "de.neon.zaehler")))
 
         aufbau(
-            "mach mir eine app", TaskCategory.CODE, engine, FakeTts(),
+            "mach mir eine android app", TaskCategory.CODE, engine, FakeTts(),
             listOf(anlegen, Fertig()), protokoll,
         ).handleUtterance(samples)
 
@@ -253,7 +253,7 @@ class WerkzeugketteTest {
         )
 
         aufbau(
-            "leg das projekt an", TaskCategory.CODE, engine, FakeTts(),
+            "leg das android projekt an", TaskCategory.CODE, engine, FakeTts(),
             listOf(anlegen, Fertig()), protokoll,
         ).handleUtterance(samples)
 
@@ -295,7 +295,7 @@ class WerkzeugketteTest {
         )
 
         aufbau(
-            "schreib was", TaskCategory.CODE, engine, FakeTts(),
+            "schreib was in kotlin", TaskCategory.CODE, engine, FakeTts(),
             listOf(werkzeug, Fertig()), protokoll,
         ).handleUtterance(samples)
 
@@ -364,7 +364,7 @@ class WerkzeugketteTest {
                     )
                 },
             ),
-            asr = FakeAsr("leg das projekt an und bau es"),
+            asr = FakeAsr("leg das android projekt an und bau es"),
             tts = FakeTts(),
             lifecycle = lifecycle,
             engine = engine,
@@ -399,7 +399,7 @@ class WerkzeugketteTest {
         )
 
         aufbau(
-            "mach mir eine app", TaskCategory.CODE, engine, tts,
+            "mach mir eine android app", TaskCategory.CODE, engine, tts,
             listOf(anlegen, Rueckfrage(), Fertig()), protokoll,
         ).handleUtterance(samples)
 
@@ -422,5 +422,87 @@ class WerkzeugketteTest {
 
         assertEquals(1, wlan.aufrufe)
         assertEquals(1, engine.aufrufe, "die Gerätewerkzeuge haben eine zweite Runde bekommen")
+    }
+
+    // ---- Die Rueckfrage vor dem Bauen ---------------------------------------------------
+
+    /**
+     * **Der Fall, an dem alles Bisherige gescheitert ist.**
+     *
+     * Auf „programmiere eine QR-Generierungs-App" hat Neon ungefragt ein Python-Skript
+     * geschrieben, ohne Projekt — obwohl `rueckfrage` an erster Stelle in der Werkzeugliste
+     * stand, die Gabelung in seiner Beschreibung genannt war und dieselbe Regel im
+     * Systemprompt stand. Ein 1.7-B-Modell trifft diese Wahl nicht.
+     *
+     * Jetzt entscheidet eine Regel, und zwar **vor** dem Routen: kein Serverstart, keine
+     * Erzeugung, kein Token. Der Test prueft beides — dass gefragt wird, und dass dabei
+     * nichts erzeugt wurde.
+     */
+    @Test
+    fun `ein Bauauftrag ohne Sprache wird zuerst zurueckgefragt`() = runTest {
+        val anlegen = NotierendesWerkzeug("app-anlegen", "Projekt angelegt.")
+        val tts = FakeTts()
+        val engine = SkriptEngine(listOf(ruf("app-anlegen", "de.neon.qr")))
+
+        val bericht = aufbau("egal", TaskCategory.CODE, engine, tts, listOf(anlegen), mutableListOf())
+            .handleText("programmiere eine qr generierungsapp")!!
+
+        assertEquals(Zielklaerung.FRAGE_SPRACHE, bericht.answer)
+        assertEquals(0, anlegen.aufrufe, "vor der Antwort darf nichts angelegt werden")
+        assertTrue(bericht.usedNoModel, "die Frage ist ein fester Satz, keine Erzeugung")
+        assertTrue(engine.prompts.isEmpty(), "es wurde nichts erzeugt: " + engine.prompts)
+    }
+
+    /**
+     * **Und die Antwort findet zurueck zum Auftrag.**
+     *
+     * Ohne das waere die Rueckfrage schlimmer als nutzlos: Auf „Android" allein folgt eine
+     * neue Einordnung, und „Android" ist fuer sich genommen keine Programmieraufgabe — die
+     * Kette liefe gar nicht erst an, und der urspruengliche Auftrag waere verloren.
+     */
+    @Test
+    fun `nach der Antwort laeuft die Kette mit dem urspruenglichen Auftrag`() = runTest {
+        val anlegen = NotierendesWerkzeug("app-anlegen", "Projekt angelegt.")
+        val protokoll = mutableListOf<String>()
+        val engine = SkriptEngine(
+            listOf(
+                ruf("app-anlegen", "de.neon.qr"),
+                """{"werkzeug":"fertig","argumente":{"zusammenfassung":"Liegt bereit."}}""",
+            )
+        )
+
+        val neon = aufbau(
+            "egal", TaskCategory.CODE, engine, FakeTts(),
+            listOf(anlegen, Fertig()), protokoll,
+        )
+        neon.handleText("programmiere eine qr generierungsapp")
+        neon.handleText("Android")
+
+        assertEquals(1, anlegen.aufrufe, "nach der Antwort muss die Kette laufen")
+        // Der zusammengesetzte Auftrag steht im Prompt, nicht bloss das Wort „Android".
+        assertTrue(
+            engine.prompts.any { "qr generierungsapp" in it },
+            "der urspruengliche Auftrag ist verloren gegangen: " + engine.prompts,
+        )
+        assertTrue(
+            protokoll.any { "wieder zusammengesetzt" in it },
+            protokoll.toString(),
+        )
+    }
+
+    /** Zweimal fragen waere eine Schleife. Nach der Antwort wird gearbeitet. */
+    @Test
+    fun `nach der Antwort wird nicht noch einmal gefragt`() = runTest {
+        val anlegen = NotierendesWerkzeug("app-anlegen", "Projekt angelegt.")
+        val engine = SkriptEngine(listOf(ruf("app-anlegen", "de.neon.qr")))
+
+        val neon = aufbau(
+            "egal", TaskCategory.CODE, engine, FakeTts(),
+            listOf(anlegen), mutableListOf(),
+        )
+        neon.handleText("mach mir eine zaehler app")
+        val zweiter = neon.handleText("python")!!
+
+        assertTrue(zweiter.answer != Zielklaerung.FRAGE_SPRACHE, zweiter.answer)
     }
 }
