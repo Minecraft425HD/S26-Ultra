@@ -505,4 +505,69 @@ class WerkzeugketteTest {
 
         assertTrue(zweiter.answer != Zielklaerung.FRAGE_SPRACHE, zweiter.answer)
     }
+
+    /**
+     * **Wer die Frage uebergeht, wird noch einmal gefragt.**
+     *
+     * Auf dem Geraet kam auf „Android oder Python?" der urspruengliche Auftrag ein zweites
+     * Mal zurueck. Neon hat das kommentarlos als Antwort genommen und ohne Sprache
+     * weitergearbeitet — heraus kam eine Prosa-Antwort von 220 Token und kein Projekt. Eine
+     * Frage, die man auch dadurch beantworten kann, dass man sie uebergeht, ist keine.
+     */
+    @Test
+    fun `eine Nicht-Antwort fuehrt zu einer zweiten Frage`() = runTest {
+        val anlegen = NotierendesWerkzeug("app-anlegen", "Projekt angelegt.")
+        val engine = SkriptEngine(listOf(ruf("app-anlegen", "de.neon.qr")))
+
+        val neon = aufbau(
+            "egal", TaskCategory.CODE, engine, FakeTts(), listOf(anlegen), mutableListOf(),
+        )
+        neon.handleText("programmiere eine qr generierungsapp")
+        val zweite = neon.handleText("programmiere eine qr generierungsapp")!!
+
+        assertEquals(Zielklaerung.FRAGE_NOCHMAL, zweite.answer)
+        assertEquals(0, anlegen.aufrufe, "ohne Sprache darf nichts angelegt werden")
+    }
+
+    /** Aber nicht endlos: Nach zwei Fragen wird gearbeitet. */
+    @Test
+    fun `nach zwei Fragen versucht Neon es trotzdem`() = runTest {
+        val anlegen = NotierendesWerkzeug("app-anlegen", "Projekt angelegt.")
+        val engine = SkriptEngine(listOf(ruf("app-anlegen", "de.neon.qr")))
+
+        val neon = aufbau(
+            "egal", TaskCategory.CODE, engine, FakeTts(), listOf(anlegen), mutableListOf(),
+        )
+        neon.handleText("programmiere eine qr generierungsapp")
+        neon.handleText("weiss nicht")
+        val dritte = neon.handleText("weiss nicht")!!
+
+        assertTrue(dritte.answer != Zielklaerung.FRAGE_SPRACHE, dritte.answer)
+        assertTrue(dritte.answer != Zielklaerung.FRAGE_NOCHMAL, dritte.answer)
+        assertEquals(1, anlegen.aufrufe, "irgendwann muss es weitergehen")
+    }
+
+    /**
+     * **Nach der Antwort steht die Kategorie fest.**
+     *
+     * „Android" allein ist keine Programmieraufgabe. Wird die Antwort fuer sich eingeordnet,
+     * laeuft die Werkzeugkette gar nicht erst an — genau das steht im Geraeteprotokoll: eine
+     * Prosa-Antwort statt eines Projekts.
+     */
+    @Test
+    fun `die Antwort auf die Rueckfrage wird als Programmierauftrag eingeordnet`() = runTest {
+        val anlegen = NotierendesWerkzeug("app-anlegen", "Projekt angelegt.")
+        val engine = SkriptEngine(listOf(ruf("app-anlegen", "de.neon.qr")))
+
+        // Der Router ordnet hier absichtlich als WISSENSFRAGE ein — so, wie er „Android"
+        // fuer sich genommen einordnen wuerde. Die bekannte Kategorie muss das schlagen.
+        val neon = aufbau(
+            "egal", TaskCategory.WISSENSFRAGE, engine, FakeTts(),
+            listOf(anlegen), mutableListOf(),
+        )
+        neon.handleText("programmiere eine qr generierungsapp")
+        neon.handleText("Android")
+
+        assertEquals(1, anlegen.aufrufe, "die Kette lief nicht an")
+    }
 }

@@ -28,9 +28,27 @@ package de.neon.service
 object Zielklaerung {
 
     /** Was Neon fragt, wenn die Sprache offen ist. Ein fester Satz, keine Erzeugung. */
-    const val FRAGE_SPRACHE =
-        "Soll das eine Android-App werden, die du installieren kannst, oder ein " +
-            "Python-Skript? Sag einfach „Android\" oder „Python\"."
+    const val FRAGE_SPRACHE = "Android oder Python?"
+
+    /**
+     * Dieselbe Frage noch einmal, deutlicher.
+     *
+     * **Weil die erste Antwort keine war.** Auf dem Gerät kam auf „Android oder Python?" der
+     * ursprüngliche Auftrag ein zweites Mal zurück — und Neon hat das kommentarlos als
+     * Antwort genommen und ohne Sprache weitergearbeitet. Eine Frage, die man auch dadurch
+     * beantworten kann, dass man sie übergeht, ist keine.
+     */
+    const val FRAGE_NOCHMAL =
+        "Das habe ich nicht als Antwort verstanden. Antworte bitte mit einem Wort: " +
+            "Android für eine App zum Installieren, Python für ein Skript."
+
+    /**
+     * Wie oft nach derselben Sache gefragt wird, bevor Neon es trotzdem versucht.
+     *
+     * Zweimal. Ein Assistent, der dieselbe Frage dreimal stellt, ist kaputt; einer, der nach
+     * der ersten unbeantworteten Frage aufgibt, ebenso.
+     */
+    const val MAX_RUECKFRAGEN = 2
 
     /**
      * Wörter, die einen Bauauftrag erkennbar machen.
@@ -96,6 +114,18 @@ object Zielklaerung {
      * Zusammengesetzt wird zu **einem** Satz, damit die Einordnung dieselbe ist wie ohne die
      * Zwischenfrage.
      */
-    fun zusammengefuegt(urspruenglich: String, antwort: String): String =
-        "$urspruenglich (${antwort.trim()})"
+    fun zusammengefuegt(urspruenglich: String, antwort: String): String {
+        val sauber = antwort.trim()
+        // **Nicht verdoppeln.** Auf dem Gerät kam als „Antwort" der ursprüngliche Auftrag
+        // noch einmal, und heraus kam „programmiere eine qr generierungsapp (programmiere
+        // eine qr generierungsapp)". Ein doppelter Satz ist kein zusätzlicher Hinweis — er
+        // verändert nur die Einordnung, und zwar unvorhersagbar.
+        if (sauber.equals(urspruenglich.trim(), ignoreCase = true)) return urspruenglich
+        if (sauber.length > urspruenglich.length &&
+            urspruenglich.trim().lowercase() in sauber.lowercase()
+        ) {
+            return sauber
+        }
+        return "$urspruenglich ($sauber)"
+    }
 }

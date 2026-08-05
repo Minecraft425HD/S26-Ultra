@@ -2,6 +2,7 @@ package de.neon.service
 
 import kotlin.test.Test
 import kotlin.test.assertContains
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -144,5 +145,55 @@ class ZielklaerungTest {
         val zusammen = Zielklaerung.zusammengefuegt("bau mir eine Zähler-App", "python bitte")
 
         assertFalse(fragt(zusammen), zusammen)
+    }
+
+    // ---- Was das Geraet gezeigt hat -----------------------------------------------------
+
+    /**
+     * **Der Auftrag wird nicht verdoppelt.**
+     *
+     * Auf „Android oder Python?" kam der ursprüngliche Auftrag ein zweites Mal zurück. Heraus
+     * kam „programmiere eine qr generierungsapp (programmiere eine qr generierungsapp)" — ein
+     * doppelter Satz ist kein zusätzlicher Hinweis, er verändert nur die Einordnung, und zwar
+     * unvorhersagbar.
+     */
+    @Test
+    fun `dieselbe Antwort wie die Frage verdoppelt den Auftrag nicht`() {
+        val auftrag = "programmiere eine qr generierungsapp"
+
+        assertEquals(auftrag, Zielklaerung.zusammengefuegt(auftrag, auftrag))
+        assertEquals(auftrag, Zielklaerung.zusammengefuegt(auftrag, "  $auftrag  "))
+    }
+
+    @Test
+    fun `eine Antwort, die den Auftrag enthaelt, ersetzt ihn`() {
+        val zusammen = Zielklaerung.zusammengefuegt(
+            "programmiere eine qr app",
+            "programmiere eine qr app für Android",
+        )
+
+        assertEquals("programmiere eine qr app für Android", zusammen)
+        assertFalse(fragt(zusammen), zusammen)
+    }
+
+    /**
+     * **Eine Nicht-Antwort bleibt eine Nicht-Antwort.**
+     *
+     * Der zusammengesetzte Auftrag muss weiterhin die Frage auslösen — sonst arbeitet Neon
+     * ohne Sprache weiter, und genau das ist auf dem Gerät passiert.
+     */
+    @Test
+    fun `nach einer Nicht-Antwort ist die Frage weiter offen`() {
+        val auftrag = "programmiere eine qr generierungsapp"
+
+        assertTrue(fragt(Zielklaerung.zusammengefuegt(auftrag, auftrag)))
+        assertTrue(fragt(Zielklaerung.zusammengefuegt(auftrag, "ja mach mal")))
+    }
+
+    @Test
+    fun `die zweite Frage sagt, was als Antwort erwartet wird`() {
+        assertContains(Zielklaerung.FRAGE_NOCHMAL, "Android")
+        assertContains(Zielklaerung.FRAGE_NOCHMAL, "Python")
+        assertContains(Zielklaerung.FRAGE_NOCHMAL, "einem Wort")
     }
 }

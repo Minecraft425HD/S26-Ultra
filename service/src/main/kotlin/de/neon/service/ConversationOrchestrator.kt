@@ -269,6 +269,9 @@ class ConversationOrchestrator(
      */
     private var offeneFrage: String? = null
 
+    /** Wie oft zu diesem Auftrag schon nachgefragt wurde. Siehe [Zielklaerung.MAX_RUECKFRAGEN]. */
+    private var rueckfragen: Int = 0
+
     /**
      * Genau ein Durchgang zur Zeit.
      *
@@ -420,6 +423,7 @@ class ConversationOrchestrator(
         } else {
             text
         }
+        if (offen == null) rueckfragen = 0
 
         // **Fragen, bevor irgendetwas erzeugt wird.**
         //
@@ -432,10 +436,27 @@ class ConversationOrchestrator(
         //
         // Vor dem Routen, also **ohne eine einzige Erzeugung**: Die Frage ist ein fester
         // Satz. Sie kostet keinen Serverstart, kein Token und keine Wartezeit.
-        if (offen == null && Zielklaerung.brauchtSprachfrage(auftrag, projektIstAndroid())) {
-            offeneFrage = auftrag
-            log("Rückfrage nach der Sprache: „$auftrag\"")
-            return@withLock rueckfrageBericht(Zielklaerung.FRAGE_SPRACHE, startedAt)
+        // **Auch nach der Antwort geprüft, und das ist der Punkt.** Auf dem Gerät kam auf
+        // „Android oder Python?" der ursprüngliche Auftrag ein zweites Mal zurück — und Neon
+        // hat das kommentarlos als Antwort genommen und ohne Sprache weitergearbeitet. Eine
+        // Frage, die man auch dadurch beantworten kann, dass man sie übergeht, ist keine.
+        //
+        // Zweimal, dann nicht mehr: Ein Assistent, der dieselbe Frage dreimal stellt, ist
+        // kaputt.
+        if (Zielklaerung.brauchtSprachfrage(auftrag, projektIstAndroid()) &&
+            rueckfragen < Zielklaerung.MAX_RUECKFRAGEN
+        ) {
+            // Der **ursprüngliche** Auftrag wird gemerkt, nicht der zusammengesetzte. Sonst
+            // wächst der Text mit jeder Nachfrage, und die Einordnung wandert mit.
+            offeneFrage = offen ?: auftrag
+            rueckfragen++
+            val frage = if (rueckfragen == 1) {
+                Zielklaerung.FRAGE_SPRACHE
+            } else {
+                Zielklaerung.FRAGE_NOCHMAL
+            }
+            log("Rückfrage $rueckfragen nach der Sprache: „${offeneFrage}\"")
+            return@withLock rueckfrageBericht(frage, startedAt)
         }
 
         // Vor dem Routen: Die neue Äußerung bewertet rückwirkend den vorherigen Durchgang.
@@ -447,6 +468,12 @@ class ConversationOrchestrator(
             text = auftrag,
             hasImage = hasImage,
             explicitDeepThinking = wantsDeeperAnswer(auftrag),
+            // **Nach einer beantworteten Rückfrage steht die Kategorie fest.** Neon hat mit
+            // der Frage bereits festgestellt, dass ein Bauauftrag vorliegt; die Antwort
+            // ändert daran nichts. Ohne das wurde „Android" für sich genommen eingeordnet —
+            // als gewöhnliche Frage —, und die Werkzeugkette lief gar nicht erst an. Genau
+            // das steht im Geräteprotokoll: eine Prosa-Antwort von 220 Token, kein Projekt.
+            bekannteKategorie = if (offen != null) TaskCategory.CODE else null,
         )
         val decision = router.route(utterance, deviceState())
 

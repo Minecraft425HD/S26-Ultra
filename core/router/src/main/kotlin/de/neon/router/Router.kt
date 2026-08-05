@@ -69,6 +69,14 @@ class Router(
     private fun applyOverrides(analysis: RouteAnalysis, utterance: Utterance): RouteAnalysis {
         var result = analysis
 
+        // Eine Kategorie, die schon feststeht, schlägt jede Schätzung — siehe
+        // [Utterance.bekannteKategorie]. Auf dem Gerät wurde die Antwort „Android" auf Neons
+        // eigene Rückfrage als gewöhnliche Frage eingeordnet, und die Werkzeugkette lief
+        // gar nicht erst an.
+        utterance.bekannteKategorie?.let { kategorie ->
+            result = result.copy(category = kategorie, confidence = maxOf(result.confidence, 0.9))
+        }
+
         if (utterance.hasImage) {
             result = result.copy(
                 category = TaskCategory.BILD,

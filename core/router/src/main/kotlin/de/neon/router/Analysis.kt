@@ -63,6 +63,19 @@ data class Utterance(
     /** Hat der Nutzer ausdrücklich um eine gründlichere Antwort gebeten? */
     val explicitDeepThinking: Boolean = false,
     val locale: String = "de-DE",
+    /**
+     * Eine Kategorie, die schon feststeht — dann wird nicht mehr geschätzt.
+     *
+     * **Der Fall, für den es das gibt.** Hat Neon gerade „Android oder Python?" gefragt, dann
+     * hat es damit bereits festgestellt, dass ein Bauauftrag vorliegt. Die Antwort darauf ist
+     * für sich genommen kein Programmierauftrag — „Android" allein würde als Wissensfrage
+     * eingeordnet, und die Werkzeugkette liefe nicht an. Genau das ist auf dem Gerät
+     * passiert.
+     *
+     * Gehört zu denselben harten Tatsachen wie [hasImage]: Etwas, das die App sicher weiß und
+     * worüber kein Modell abstimmen muss.
+     */
+    val bekannteKategorie: TaskCategory? = null,
 )
 
 /**
