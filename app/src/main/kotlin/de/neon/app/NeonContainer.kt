@@ -80,7 +80,24 @@ class NeonContainer(context: Context) {
 
     val registry: ModelRegistry = ModelRegistry.defaultForS26Ultra()
 
-    val modelStore = ModelStore(File(appContext.filesDir, "models"))
+    val modelStore = ModelStore(File(appContext.filesDir, "models")).also { store ->
+        // **Sagen, welche Datei aussortiert wurde und warum.** Ein Modell, das kommentarlos
+        // aus der Liste verschwindet, ist schlimmer als eines, das falsche Antworten gibt —
+        // beim zweiten weiß man wenigstens, dass etwas nicht stimmt.
+        registry.models.forEach { modell ->
+            val datei = store.fileFor(modell) ?: return@forEach
+            if (store.istBruchstueck(modell, datei.length())) {
+                NeonLog.w(
+                    TAG,
+                    "${modell.id} wird nicht benutzt: die Datei hat " +
+                        "${datei.length() / (1024 * 1024)} MB, der Eintrag nennt " +
+                        "${modell.sizeBytes / (1024 * 1024)} MB. Das ist kein " +
+                        "quantisiertes Modell mehr, sondern ein abgebrochener Download. " +
+                        "Bitte in den Einstellungen löschen und neu importieren.",
+                )
+            }
+        }
+    }
 
     /**
      * Startet und überwacht den mitgelieferten `llama-server`.

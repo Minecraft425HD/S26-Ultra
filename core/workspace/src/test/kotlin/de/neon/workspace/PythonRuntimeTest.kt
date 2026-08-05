@@ -48,6 +48,21 @@ class PythonRuntimeTest {
         return { bytes.toByteArray().inputStream() }
     }
 
+    /**
+     * Dieselben Einträge, aber mit `encodings/__init__.py`.
+     *
+     * **Ohne dieses Paket ist eine Python-Umgebung keine.** Der Interpreter kommt damit nicht
+     * bis zur ersten Zeile eines Skripts — er kann ohne es keine Zeichenkette dekodieren. Die
+     * Tests hier hatten es nie dabei, und deshalb konnten sie grün sein, während auf dem Gerät
+     * jedes Skript mit `ModuleNotFoundError: No module named 'encodings'` abbrach: Sie prüften
+     * das Entpacken, nicht die Benutzbarkeit.
+     */
+    private fun mitEncodings(
+        fassung: String,
+        vararg eintraege: Pair<String, String>,
+    ): Array<Pair<String, String>> =
+        arrayOf("$fassung/encodings/__init__.py" to "# encodings", *eintraege)
+
     /** Ein Starter, der statt Python die Umgebung und seine Argumente ausgibt. */
     private fun attrappenStarter(nativeDir: File): Boolean {
         val sh = shell ?: return false
@@ -73,39 +88,86 @@ class PythonRuntimeTest {
         val runtime = PythonRuntime(a.nativeDir, a.dataDir)
 
         val entpackt = runtime.einrichten(
-            stdlibZip("python3.14/os.py" to "# os", "python3.14/json/__init__.py" to "# json"),
+            stdlibZip(*mitEncodings("python3.14", "python3.14/os.py" to "# os", "python3.14/json/__init__.py" to "# json")),
             fassung = "abc123",
         )
 
         assertTrue(entpackt)
-        assertEquals("# os", File(runtime.home, "python3.14/os.py").readText())
-        assertEquals("# json", File(runtime.home, "python3.14/json/__init__.py").readText())
+        assertEquals("# os", File(runtime.stdlib, "python3.14/os.py").readText())
+        assertEquals("# json", File(runtime.stdlib, "python3.14/json/__init__.py").readText())
+    }
+
+    /**
+     * **Die Standardbibliothek muss dort liegen, wo Python sie sucht.**
+     *
+     * Das ist der Test, der zwei Monate lang gefehlt hat. Entpackt wurde direkt nach
+     * `PYTHONHOME`; Python sucht aber unter `$PYTHONHOME/lib/pythonX.Y/`. Diese eine Ebene
+     * fehlte, und auf dem Gerät hieß das:
+     *
+     *     Fatal Python error: Failed to import encodings module
+     *     ModuleNotFoundError: No module named 'encodings'
+     *
+     * Eine Meldung, die aussieht, als fehle ein Modul. Es fehlte keines — sie lagen alle da,
+     * eine Ebene zu hoch. Die Tests waren derweil grün, weil sie „liegt die Datei irgendwo
+     * unter home" prüften statt „findet Python sie".
+     */
+    @Test
+    fun `die Standardbibliothek landet unter lib, wo Python sie sucht`() {
+        val a = aufbau()
+        val runtime = PythonRuntime(a.nativeDir, a.dataDir)
+
+        runtime.einrichten(stdlibZip(*mitEncodings("python3.14")), "abc")
+
+        // Genau dieser Pfad: PYTHONHOME + /lib/ + pythonX.Y + /encodings.
+        assertTrue(
+            File(runtime.home, "lib/python3.14/encodings/__init__.py").isFile,
+            "gefunden wurde stattdessen: " +
+                runtime.home.walkTopDown().filter { it.isFile }.joinToString(),
+        )
+        assertEquals(File(runtime.home, "lib"), runtime.stdlib)
+    }
+
+    /**
+     * Und ohne `encodings` gilt die Umgebung nicht als eingerichtet.
+     *
+     * Sonst meldet Neon beim Start „Python bereit" und jedes Skript scheitert danach — genau
+     * die Kombination, die den Fehler so lange verdeckt hat.
+     */
+    @Test
+    fun `ohne encodings ist die Umgebung nicht bereit`() {
+        val a = aufbau()
+        if (!attrappenStarter(a.nativeDir)) return
+        val runtime = PythonRuntime(a.nativeDir, a.dataDir)
+
+        runtime.einrichten(stdlibZip("python3.14/os.py" to "# os"), "abc")
+
+        assertFalse(runtime.bereit, "eine Umgebung ohne encodings kann nichts ausführen")
     }
 
     @Test
     fun `beim zweiten Start wird nicht erneut ausgepackt`() {
         val a = aufbau()
         val runtime = PythonRuntime(a.nativeDir, a.dataDir)
-        runtime.einrichten(stdlibZip("python3.14/os.py" to "# os"), "abc123")
+        runtime.einrichten(stdlibZip(*mitEncodings("python3.14", "python3.14/os.py" to "# os")), "abc123")
 
         // Auspacken kostet auf dem Telefon Sekunden. Es bei jedem Start zu tun wäre eine
         // Wartezeit ohne Gegenwert.
-        assertFalse(runtime.einrichten(stdlibZip("python3.14/os.py" to "# neu"), "abc123"))
-        assertEquals("# os", File(runtime.home, "python3.14/os.py").readText())
+        assertFalse(runtime.einrichten(stdlibZip(*mitEncodings("python3.14", "python3.14/os.py" to "# neu")), "abc123"))
+        assertEquals("# os", File(runtime.stdlib, "python3.14/os.py").readText())
     }
 
     @Test
     fun `eine neue Fassung wird ausgepackt und die alte weggeraeumt`() {
         val a = aufbau()
         val runtime = PythonRuntime(a.nativeDir, a.dataDir)
-        runtime.einrichten(stdlibZip("python3.13/alt.py" to "# alt"), "erste")
+        runtime.einrichten(stdlibZip(*mitEncodings("python3.13", "python3.13/alt.py" to "# alt")), "erste")
 
-        assertTrue(runtime.einrichten(stdlibZip("python3.14/neu.py" to "# neu"), "zweite"))
+        assertTrue(runtime.einrichten(stdlibZip(*mitEncodings("python3.14", "python3.14/neu.py" to "# neu")), "zweite"))
 
         // Ein Rest aus einer anderen Fassung wäre schlimmer als nichts: Python fände dann
         // Module aus zwei Fassungen gemischt.
-        assertFalse(File(runtime.home, "python3.13/alt.py").exists())
-        assertTrue(File(runtime.home, "python3.14/neu.py").exists())
+        assertFalse(File(runtime.stdlib, "python3.13/alt.py").exists())
+        assertTrue(File(runtime.stdlib, "python3.14/neu.py").exists())
     }
 
     @Test
@@ -116,12 +178,12 @@ class PythonRuntimeTest {
         // Ein Verzeichnis, das aussieht wie ein fertiges — genau der Zustand nach einem
         // Abbruch. Ohne die Markierung darf das nicht als eingerichtet gelten, sonst fehlt
         // irgendein Modul und der Fehler heißt später „import ssl geht nicht".
-        File(runtime.home, "python3.14").mkdirs()
-        File(runtime.home, "python3.14/os.py").writeText("# halb")
+        File(runtime.stdlib, "python3.14").mkdirs()
+        File(runtime.stdlib, "python3.14/os.py").writeText("# halb")
 
         assertFalse(runtime.bereit)
-        assertTrue(runtime.einrichten(stdlibZip("python3.14/os.py" to "# ganz"), "abc"))
-        assertEquals("# ganz", File(runtime.home, "python3.14/os.py").readText())
+        assertTrue(runtime.einrichten(stdlibZip(*mitEncodings("python3.14", "python3.14/os.py" to "# ganz")), "abc"))
+        assertEquals("# ganz", File(runtime.stdlib, "python3.14/os.py").readText())
     }
 
     @Test
@@ -131,21 +193,21 @@ class PythonRuntimeTest {
         val opfer = File(a.dataDir, "wichtig.txt").apply { writeText("unberührt") }
 
         runtime.einrichten(
-            stdlibZip("../wichtig.txt" to "überschrieben", "python3.14/os.py" to "# os"),
+            stdlibZip(*mitEncodings("python3.14", "../wichtig.txt" to "überschrieben", "python3.14/os.py" to "# os")),
             "abc",
         )
 
         // Dass das ZIP aus den eigenen Assets kommt, ist kein Argument: Die Prüfung kostet
         // nichts und macht die Funktion für jedes ZIP richtig.
         assertEquals("unberührt", opfer.readText())
-        assertTrue(File(runtime.home, "python3.14/os.py").exists())
+        assertTrue(File(runtime.stdlib, "python3.14/os.py").exists())
     }
 
     @Test
     fun `ohne Starter kommt eine Erklaerung statt eines Absturzes`() {
         val a = aufbau()
         val runtime = PythonRuntime(a.nativeDir, a.dataDir)
-        runtime.einrichten(stdlibZip("python3.14/os.py" to "#"), "abc")
+        runtime.einrichten(stdlibZip(*mitEncodings("python3.14")), "abc")
 
         val ergebnis = runtime.fuehreAus("print(1)", Workspace(a.projekt))
 
@@ -170,7 +232,7 @@ class PythonRuntimeTest {
         val a = aufbau()
         if (!attrappenStarter(a.nativeDir)) return
         val runtime = PythonRuntime(a.nativeDir, a.dataDir)
-        runtime.einrichten(stdlibZip("python3.14/os.py" to "#"), "abc")
+        runtime.einrichten(stdlibZip(*mitEncodings("python3.14")), "abc")
         val workspace = Workspace(a.projekt)
 
         val ergebnis = runtime.fuehreAus("print('hallo')", workspace)
@@ -191,7 +253,7 @@ class PythonRuntimeTest {
         val a = aufbau()
         if (!attrappenStarter(a.nativeDir)) return
         val runtime = PythonRuntime(a.nativeDir, a.dataDir)
-        runtime.einrichten(stdlibZip("python3.14/os.py" to "#"), "abc")
+        runtime.einrichten(stdlibZip(*mitEncodings("python3.14")), "abc")
         val workspace = Workspace(a.projekt)
 
         runtime.fuehreAus("print('hallo')", workspace)
@@ -207,7 +269,7 @@ class PythonRuntimeTest {
         val a = aufbau()
         if (!attrappenStarter(a.nativeDir)) return
         val runtime = PythonRuntime(a.nativeDir, a.dataDir)
-        runtime.einrichten(stdlibZip("python3.14/os.py" to "#"), "abc")
+        runtime.einrichten(stdlibZip(*mitEncodings("python3.14")), "abc")
 
         val ergebnis = runtime.fuehreSkriptAus("../../etc/passwd", Workspace(a.projekt))
 
@@ -236,7 +298,7 @@ class PythonRuntimeTest {
             setExecutable(true)
         }
         val runtime = PythonRuntime(a.nativeDir, a.dataDir)
-        runtime.einrichten(stdlibZip("python3.14/os.py" to "#"), "abc")
+        runtime.einrichten(stdlibZip(*mitEncodings("python3.14")), "abc")
         val workspace = Workspace(a.projekt)
 
         val gut = runtime.fuehreAus("print(6 * 7)", workspace)

@@ -131,4 +131,52 @@ class ModelStoreTest {
         assertTrue(store.delete(spec))
         assertFalse(store.isAvailable(spec))
     }
+
+    // ---- Bruchstuecke ------------------------------------------------------------------
+
+    /**
+     * **Eine Datei, die viel zu klein ist, ist kein Modell.**
+     *
+     * Der Fall vom Gerät: Im Slot `qwen3-coder-7b` lag eine Datei von 378 MB, wo der Eintrag
+     * 4608 MB nennt — acht Prozent. Neon hat sie geladen und benutzt, denn `isFile && length
+     * > 0` war die ganze Prüfung. Der Router schickte jede Programmierfrage dorthin, weil im
+     * Eintrag „Coder 7B" steht, und bekam Antworten von etwas, das dieses Modell nicht ist:
+     * Auf „mach mir eine QR-App" rief es das Python-Werkzeug auf und übergab ihm Kotlin.
+     */
+    @Test
+    fun `ein Bruchstueck gilt nicht als vorhanden`() {
+        val gross = spec.copy(id = "qwen3-coder-7b", sizeBytes = 4608L * 1024 * 1024)
+        File(root, "${gross.id}.gguf").writeBytes(ByteArray(378 * 1024) { 0 })
+
+        assertTrue(store.istBruchstueck(gross, 378L * 1024 * 1024))
+        assertFalse(store.isAvailable(gross), "acht Prozent des Eintrags ist ein Abbruch")
+    }
+
+    /**
+     * **Wer bewusst stärker quantisiert importiert, wird nicht ausgesperrt.**
+     *
+     * `Q4_K_M` gegen `Q8_0` sind rund 53 Prozent des Eintrags. Das ist eine legitime Wahl und
+     * darf nicht als kaputt gelten — deshalb liegt die Grenze bei einem Viertel und nicht bei
+     * der Hälfte.
+     */
+    @Test
+    fun `eine staerker quantisierte Fassung bleibt gueltig`() {
+        val gross = spec.copy(id = "qwen3-coder-7b", sizeBytes = 4608L * 1024 * 1024)
+
+        assertFalse(store.istBruchstueck(gross, 2400L * 1024 * 1024), "gut die Hälfte")
+        assertFalse(store.istBruchstueck(gross, 1200L * 1024 * 1024), "ein Viertel, gerade noch")
+        assertTrue(store.istBruchstueck(gross, 1100L * 1024 * 1024), "darunter nicht mehr")
+    }
+
+    /**
+     * Kleine Einträge werden nicht geprüft.
+     *
+     * Unter 256 MB beschreibt kein Eintrag ein Sprachmodell. Dort gibt es keinen Download,
+     * der abbrechen könnte, und ein Verhältnis von einem Viertel sagt nichts.
+     */
+    @Test
+    fun `unterhalb der Modellgroesse wird nicht geprueft`() {
+        assertFalse(store.istBruchstueck(spec.copy(sizeBytes = 100), 1))
+        assertFalse(store.istBruchstueck(spec.copy(sizeBytes = 0), 1))
+    }
 }

@@ -75,7 +75,24 @@ object WorkspaceToolset {
             add(DateiAendern(tools))
             add(DateienAuflisten(tools))
         }
-        if (python != null) add(PythonAusfuehren(workspace, python))
+        // **Die App-Werkzeuge vor Python, und das ist kein Schönheitsfrage.** Auf dem Gerät
+        // rief das Modell auf „mach mir eine QR-App" das Werkzeug `python` auf — und schob
+        // ihm Kotlin-Quelltext mit `import android.app.Activity` unter. Beides stand im
+        // Prompt; `python` stand weiter oben, und seine Beschreibung endete auf „alles, was
+        // man ausprobieren muss".
+        //
+        // Ein Modell wählt, was zuerst dasteht und am weitesten klingt. Also steht das
+        // Werkzeug für Apps jetzt vor dem für Rechnungen, und Python sagt ausdrücklich, dass
+        // es nur Python nimmt.
+        if (build != null) {
+            if (bereich != null) add(AppAnlegenImProjekt(bereich)) else add(AppAnlegen(workspace))
+            // Bauen setzt ein Manifest voraus. Ohne eines antwortete dieses Werkzeug bisher
+            // „Es gibt noch kein Android-Projekt" — eine halbe Minute Erzeugungszeit für
+            // eine Auskunft, die schon vor dem Aufruf feststand.
+            if (paketnameAus(workspace) != null) {
+                add(AppBauen(workspace, build) { paketnameAus(workspace) })
+            }
+        }
 
         if (bereich != null) {
             val projekte = bereich.projekte()
@@ -88,15 +105,7 @@ object WorkspaceToolset {
             }
         }
 
-        if (build != null) {
-            if (bereich != null) add(AppAnlegenImProjekt(bereich)) else add(AppAnlegen(workspace))
-            // Bauen setzt ein Manifest voraus. Ohne eines antwortete dieses Werkzeug bisher
-            // „Es gibt noch kein Android-Projekt" — eine halbe Minute Erzeugungszeit für
-            // eine Auskunft, die schon vor dem Aufruf feststand.
-            if (paketnameAus(workspace) != null) {
-                add(AppBauen(workspace, build) { paketnameAus(workspace) })
-            }
-        }
+        if (python != null) add(PythonAusfuehren(workspace, python))
         // Zuletzt, damit es in der Beschreibung unter den Handlungen steht: Erst was Neon
         // tun kann, dann der Ausweg, wenn unklar ist, welche davon gemeint ist, und dann
         // das Ende der Kette.
@@ -286,11 +295,15 @@ private class PythonAusfuehren(
 ) : Tool {
     override val spec = ToolSpec(
         name = "python",
-        description = "Führt Python-Quelltext aus und gibt zurück, was er ausgibt. " +
-            "Für Rechnungen, Datenauswertung und alles, was man ausprobieren muss.",
+        // **Eng gefasst, nach einem Fehlgriff auf dem Gerät.** Hier stand „und alles, was
+        // man ausprobieren muss" — und das Modell hat darunter auch eine Android-Activity in
+        // Kotlin verstanden. Was ein Werkzeug *nicht* nimmt, muss dastehen; ein Modell liest
+        // eine weite Formulierung als Einladung.
+        description = "Führt Python aus und gibt zurück, was es ausgibt. Nur Python — für " +
+            "Rechnungen und Datenauswertung. Nicht für Kotlin, Java oder Android-Code.",
         parameters = listOf(
             ToolParameter(
-                "quelltext", ParameterType.STRING, "Der auszuführende Python-Code",
+                "quelltext", ParameterType.STRING, "Python-Code, sonst nichts",
                 langerInhalt = true,
             ),
         ),

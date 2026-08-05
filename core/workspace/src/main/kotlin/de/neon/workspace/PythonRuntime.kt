@@ -34,8 +34,25 @@ class PythonRuntime(
     private val log: (String) -> Unit = {},
 ) {
 
-    /** Wo die Standardbibliothek nach dem Entpacken liegt. */
+    /** Das Wurzelverzeichnis der Umgebung — das, was Python als `PYTHONHOME` bekommt. */
     val home: File get() = File(dataDir, HOME_NAME)
+
+    /**
+     * Wohin die Standardbibliothek entpackt wird — und **warum ein `lib` dazwischen liegt.**
+     *
+     * **Der Fehler, der Python von Anfang an unbenutzbar gemacht hat.** Das ZIP enthält
+     * `python3.14/…`, und entpackt wurde es direkt nach [home]. Python sucht seine
+     * Standardbibliothek aber unter `$PYTHONHOME/lib/python3.14/` — diese eine Ebene fehlte.
+     * Auf dem Gerät sah das so aus:
+     *
+     *     Fatal Python error: Failed to import encodings module
+     *     ModuleNotFoundError: No module named 'encodings'
+     *
+     * Eine Meldung, die den Anschein erweckt, ein Modul fehle. Es fehlte keines: Sie lagen
+     * alle da, eine Ebene zu hoch. Im Protokoll stand derweil „Python bereit" — bereit war
+     * nur das Entpacken.
+     */
+    val stdlib: File get() = File(home, "lib")
 
     /** Der Starter. Heißt `lib*.so`, ist aber ein Programm — wie llama-server und aapt2. */
     val launcher: File get() = File(nativeDir, LAUNCHER_NAME)
@@ -70,15 +87,43 @@ class PythonRuntime(
         // nichts: Python fände dann Module aus zwei Fassungen gemischt.
         home.deleteRecursively()
         markierung.delete()
-        home.mkdirs()
+        stdlib.mkdirs()
 
-        entpacke(zip(), home)
+        entpacke(zip(), stdlib)
 
-        // Zuletzt die Markierung. Bricht das Entpacken vorher ab, gilt die Umgebung als nicht
-        // eingerichtet und wird beim nächsten Mal neu gemacht.
+        // **Nachsehen, statt es zu glauben.** Ein Entpacken, das durchläuft, beweist nur,
+        // dass ein ZIP lesbar war — nicht, dass die Dateien dort liegen, wo Python sie
+        // sucht. Genau diese Lücke hat die Umgebung monatelang als „bereit" gemeldet,
+        // während jedes Skript an `encodings` scheiterte.
+        val encodings = gefundenesEncodings()
+        if (encodings == null) {
+            log(
+                "Standardbibliothek entpackt, aber Python findet sie so nicht: unter " +
+                    "${stdlib.absolutePath} liegt kein pythonX.Y/encodings/__init__.py. " +
+                    "Vorhanden: " + stdlib.list().orEmpty().joinToString(", ").ifBlank { "nichts" }
+            )
+            return true
+        }
+
+        // Zuletzt die Markierung. Bricht das Entpacken vorher ab oder liegt das Ergebnis
+        // falsch, gilt die Umgebung als nicht eingerichtet und wird neu gemacht.
         markierung.writeText(fassung)
+        log("Standardbibliothek entpackt, Python findet sie unter ${encodings.parentFile}")
         return true
     }
+
+    /**
+     * Das `encodings`-Paket an genau der Stelle, an der Python danach sucht.
+     *
+     * Der Prüfstein für die ganze Umgebung: Ohne dieses Paket kommt der Interpreter nicht
+     * einmal bis zur ersten Zeile eines Skripts — er kann ohne es keine Zeichenkette
+     * dekodieren. Findet man es, stimmt der Pfad; findet man es nicht, ist alles andere egal.
+     */
+    private fun gefundenesEncodings(): File? = stdlib.listFiles()
+        .orEmpty()
+        .filter { it.isDirectory && it.name.startsWith("python") }
+        .map { File(it, "encodings/__init__.py") }
+        .firstOrNull { it.isFile }
 
     /**
      * Führt Python-Quelltext aus.
