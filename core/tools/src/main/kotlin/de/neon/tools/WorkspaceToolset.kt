@@ -59,6 +59,19 @@ object WorkspaceToolset {
         val gibtDateien = workspace.dateien().isNotEmpty()
         val gibtOrte = workspace.erlaubteWurzeln().size > 1
 
+        // **Die Rückfrage steht vorn, und das ist eine Umkehrung.**
+        //
+        // Sie stand am Ende, mit der Begründung, erst kämen die Handlungen und dann der
+        // Ausweg. Das war falsch herum gedacht. Ein Modell wählt, was zuerst dasteht; am
+        // Ende der Liste wurde die Rückfrage nie gewählt, und Neon riet stattdessen — auf
+        // „mach mir eine QR-App" legte es ein Android-Projekt an, ohne zu fragen, ob nicht
+        // ein Python-Skript gemeint war.
+        //
+        // Und das Fragen kommt vor dem Tun, nicht danach. Bei zwölf Token je Sekunde kostet
+        // eine Rückfrage zehn Sekunden; ein falsch geratener Auftrag kostet Minuten und
+        // muss danach noch einmal gemacht werden.
+        add(Rueckfrage())
+
         add(DateiSchreiben(tools))
         if (gibtDateien) {
             // Beide setzen voraus, dass es etwas zu bewegen gibt. In einem leeren Projekt
@@ -106,10 +119,7 @@ object WorkspaceToolset {
         }
 
         if (python != null) add(PythonAusfuehren(workspace, python))
-        // Zuletzt, damit es in der Beschreibung unter den Handlungen steht: Erst was Neon
-        // tun kann, dann der Ausweg, wenn unklar ist, welche davon gemeint ist, und dann
-        // das Ende der Kette.
-        add(Rueckfrage())
+        // Das Ende der Kette zuletzt — dort gehört es hin.
         add(Fertig())
     }
 

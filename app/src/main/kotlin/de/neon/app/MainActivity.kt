@@ -28,6 +28,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -326,6 +327,9 @@ class MainActivity : ComponentActivity() {
                                     onSpeak = { withPermissions { NeonForegroundService.trigger(this) } },
                                     onShowDiagnostics = { zeigeDiagnose = true },
                                     onShowEditor = { zeigeEditor = true },
+                                    onExport = {
+                                        exportChat(ready.orchestrator.transcript.value)
+                                    },
                                     onClear = { ready.clearChat() },
                                 )
                             } else {
@@ -412,6 +416,17 @@ class MainActivity : ComponentActivity() {
                                 )
                             },
                 onShareLog = ::shareLog,
+                onClearLog = {
+                    NeonLog.clear()
+                    // Und gleich eine erste Zeile hinein: Ein leeres Protokoll sieht aus wie
+                    // eines, das nichts aufzeichnet. Der Baustand gehört ohnehin an den
+                    // Anfang jedes Berichts.
+                    NeonLog.i(
+                        "MainActivity",
+                        "Protokoll geleert — ${BuildConfig.VERSION_NAME} " +
+                            "(${BuildConfig.GIT_COMMIT}, ${BuildConfig.BUILD_TIME})",
+                    )
+                },
                 // this@MainActivity, weil wir hier in einem Column-Bereich stehen: ein
                 // blankes this wäre der ColumnScope und nicht der Context.
                 onSpeak = { withPermissions { NeonForegroundService.trigger(this@MainActivity) } },
@@ -479,6 +494,44 @@ class MainActivity : ComponentActivity() {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         startActivity(Intent.createChooser(intent, "Neon-Protokoll"))
+    }
+
+    /**
+     * Gibt den Gesprächsverlauf als Markdown-Datei weiter.
+     *
+     * **Als Datei und nicht als Nachrichtentext**, aus demselben Grund wie beim Protokoll:
+     * Android überträgt Intent-Inhalte über Binder, dessen Transaktionsgrenze bei rund einem
+     * Megabyte liegt — praktisch deutlich darunter. Ein Gespräch, in dem eine Quelldatei
+     * steht, sprengt das, und was ankommt, ist mitten im Wort abgeschnitten.
+     */
+    private fun exportChat(eintraege: List<de.neon.service.ChatEntry>) {
+        val jetzt = System.currentTimeMillis()
+        val text = de.neon.service.ChatExport.alsMarkdown(
+            eintraege = eintraege,
+            // Der Baustand gehört dazu: Bei einem gemeldeten Fehler ist das die erste Frage.
+            kopfzeile = "Fassung ${BuildConfig.VERSION_NAME} (${BuildConfig.GIT_COMMIT}, " +
+                "${BuildConfig.BUILD_TIME}).",
+            jetzt = jetzt,
+        )
+
+        val uri = runCatching {
+            val ordner = File(cacheDir, "geteilt").apply { mkdirs() }
+            val datei = File(ordner, de.neon.service.ChatExport.dateiname(jetzt))
+            datei.writeText(text)
+            FileProvider.getUriForFile(this, "$packageName.protokoll", datei)
+        }.getOrElse {
+            NeonLog.e("MainActivity", "Chat-Export nicht schreibbar", it)
+            shareText("Neon-Gespräch", text)
+            return
+        }
+
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/markdown"
+            putExtra(Intent.EXTRA_SUBJECT, "Neon-Gespräch")
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(Intent.createChooser(intent, "Neon-Gespräch"))
     }
 
     private fun shareText(subject: String, text: String) {
@@ -572,12 +625,22 @@ private fun NeonScreen(
     onImportModel: (String) -> Unit,
     onImportProjector: (String) -> Unit,
     onShareLog: () -> Unit,
+    /**
+     * Leert die Protokolldatei.
+     *
+     * **Wozu das gebraucht wird.** Ein Protokoll wächst über Tage und enthält am Ende ein
+     * Dutzend Fehlersuchen übereinander. Wer einen bestimmten Fehler zeigen will, schickt
+     * dann fünfzig Kilobyte, in denen die entscheidenden zehn Zeilen untergehen. Leeren,
+     * Fehler auslösen, teilen — das ergibt einen Bericht, der genau eine Sache beschreibt.
+     */
+    onClearLog: () -> Unit,
     onSpeak: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
 ) {
     var showDiagnostics by remember { mutableStateOf(false) }
     var diagnostics by remember { mutableStateOf<Diagnostics?>(null) }
+    var fragtNachLoeschen by remember { mutableStateOf(false) }
 
     // Die Kennzahlen werden gepollt statt beobachtet: Sie ändern sich fünfzig Mal je
     // Sekunde, und die Oberfläche jedes Mal neu zu zeichnen wäre genau die Art von
@@ -707,7 +770,28 @@ private fun NeonScreen(
                         }
 
                         Spacer(Modifier.height(8.dp))
-                        OutlinedButton(onClick = onShareLog) { Text("Protokoll teilen") }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = onShareLog) { Text("Protokoll teilen") }
+                            // Mit Rückfrage: Das Protokoll ist oft die einzige Spur eines
+                            // Fehlers, und ein Fehlgriff auf diesen Knopf löscht sie
+                            // endgültig — anders als beim Papierkorb im Projektbereich gibt
+                            // es hier nichts zurückzuholen.
+                            if (fragtNachLoeschen) {
+                                OutlinedButton(onClick = {
+                                    onClearLog()
+                                    fragtNachLoeschen = false
+                                    // Erzwingt ein Neulesen der angezeigten Zeilen.
+                                    diagnostics = readDiagnostics()
+                                }) { Text("Wirklich leeren?") }
+                                TextButton(onClick = { fragtNachLoeschen = false }) {
+                                    Text("Nein")
+                                }
+                            } else {
+                                TextButton(onClick = { fragtNachLoeschen = true }) {
+                                    Text("Leeren")
+                                }
+                            }
+                        }
                     }
                 }
 

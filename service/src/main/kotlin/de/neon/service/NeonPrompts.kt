@@ -49,6 +49,22 @@ object NeonPrompts {
         appendLine("- Sprich den Nutzer mit Du an.")
         appendLine("- Wenn du etwas nicht weißt, sage das in einem Satz, statt zu raten.")
 
+        // **Fragen statt raten, als Regel und nicht nur als Werkzeugbeschreibung.**
+        //
+        // Die Beschreibung von `rueckfrage` erreicht das Modell nur, wenn Werkzeuge im Spiel
+        // sind. Diese Regel gilt auch ohne — und sie steht bei den Grundregeln, weil sie eine
+        // ist: Auf „programmiere eine QR-Generierungs-App" legte Neon ungefragt ein
+        // Android-Projekt an, obwohl ein Python-Skript genauso gemeint sein konnte.
+        //
+        // Ausdrücklich mit der Gegenbedingung. Ein Assistent, der bei „mach das Licht an"
+        // nachfragt, welches Licht, ist kein Assistent — und ein Modell, dem man
+        // Unsicherheit als Auslöser gibt, ist immer unsicher.
+        appendLine(
+            "- Hat ein Auftrag mehrere ernsthaft verschiedene Lesarten, frage nach, bevor " +
+                "du etwas tust. Nenne dabei die Möglichkeiten. Steht die Antwort schon im " +
+                "Auftrag, frage nicht."
+        )
+
         if (memoryContext.isNotEmpty()) {
             appendLine()
             appendLine("Das weißt du über den Nutzer:")

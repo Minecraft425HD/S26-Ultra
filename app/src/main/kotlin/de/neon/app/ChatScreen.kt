@@ -72,6 +72,8 @@ fun ChatScreen(
     onShowDiagnostics: () -> Unit,
     /** Führt zum Editor: Projektdateien ansehen, ändern, zu markierten Stellen fragen. */
     onShowEditor: () -> Unit,
+    /** Gibt den ganzen Verlauf als Markdown-Datei weiter. */
+    onExport: () -> Unit,
     onClear: () -> Unit,
 ) {
     var draft by remember { mutableStateOf("") }
@@ -103,6 +105,7 @@ fun ChatScreen(
             hasEntries = entries.isNotEmpty(),
             onShowDiagnostics = onShowDiagnostics,
             onShowEditor = onShowEditor,
+            onExport = onExport,
             onClear = onClear,
         )
         HorizontalDivider()
@@ -183,6 +186,7 @@ private fun Kopfzeile(
     hasEntries: Boolean,
     onShowDiagnostics: () -> Unit,
     onShowEditor: () -> Unit,
+    onExport: () -> Unit,
     onClear: () -> Unit,
 ) {
     Row(
@@ -196,6 +200,10 @@ private fun Kopfzeile(
             Text(beschreibe(state), style = MaterialTheme.typography.bodySmall)
         }
         if (hasEntries) {
+            // **Teilen vor Leeren, und das ist Absicht.** Die beiden stehen nebeneinander,
+            // und einer von beiden ist unwiderruflich. Wer den Verlauf sichern will, soll
+            // den sichernden Knopf zuerst treffen.
+            TextButton(onClick = onExport) { Text("Teilen") }
             TextButton(onClick = onClear) { Text("Leeren") }
         }
         TextButton(onClick = onShowEditor) { Text("Projekt") }

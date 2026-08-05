@@ -23,15 +23,15 @@ class Rueckfrage : Tool {
 
     override val spec = ToolSpec(
         name = NAME,
-        description = "Stellt genau eine kurze Rückfrage und wartet auf die Antwort. " +
-            "Nimm das, wenn der Auftrag mehrere ernsthaft verschiedene Lesarten hat und die " +
-            "falsche Wahl Arbeit vernichten würde — etwa welche Datei gemeint ist oder was " +
-            "die App können soll. Nicht, wenn sich die Frage aus dem Zusammenhang ergibt.",
+        description = "Fragt nach, bevor du etwas tust. Nimm das immer, wenn der Auftrag " +
+            "mehrere ernsthaft verschiedene Lesarten hat — vor allem: Android-App oder " +
+            "Python-Skript? Welches Projekt? Was genau soll die App können? Lieber einmal " +
+            "fragen als das Falsche bauen. Nicht, wenn die Antwort im Auftrag schon steht.",
         parameters = listOf(
             ToolParameter(
                 "frage",
                 ParameterType.STRING,
-                "Die Rückfrage, ein Satz. Nenne die Möglichkeiten, zwischen denen du wählst.",
+                "Ein Satz. Nenne die Möglichkeiten, zwischen denen du wählst",
             ),
         ),
     )

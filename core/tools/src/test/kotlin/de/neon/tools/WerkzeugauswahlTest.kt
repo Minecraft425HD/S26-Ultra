@@ -66,6 +66,41 @@ class WerkzeugauswahlTest {
         )
     }
 
+    /**
+     * **Die Rückfrage steht vorn.**
+     *
+     * Sie stand am Ende, mit der Begründung, erst kämen die Handlungen und dann der Ausweg.
+     * Das war falsch herum: Ein Modell wählt, was zuerst dasteht, und am Ende der Liste wurde
+     * die Rückfrage nie gewählt. Auf „mach mir eine QR-App" legte Neon ungefragt ein
+     * Android-Projekt an, obwohl ein Python-Skript genauso gemeint sein konnte.
+     *
+     * Das Fragen kommt vor dem Tun, also auch im Prompt.
+     */
+    @Test
+    fun `die Rueckfrage ist das erste Werkzeug`() {
+        val namen = WorkspaceToolset
+            .alle(workspace = leeresProjekt(), build = bauKette())
+            .map { it.spec.name }
+
+        assertEquals("rueckfrage", namen.first(), namen.toString())
+        // Und das Ende der Kette bleibt am Ende.
+        assertEquals(Fertig.NAME, namen.last(), namen.toString())
+    }
+
+    /**
+     * Und die Beschreibung nennt den Fall, an dem es gescheitert ist.
+     *
+     * „Wenn du unsicher bist" ist als Auslöser wertlos — ein Modell, dem man Unsicherheit
+     * als Bedingung gibt, ist immer unsicher. Es braucht die konkrete Gabelung.
+     */
+    @Test
+    fun `die Rueckfrage nennt Android gegen Python als Beispiel`() {
+        val text = Rueckfrage().spec.description
+
+        assertTrue("Android" in text, text)
+        assertTrue("Python" in text, text)
+    }
+
     @Test
     fun `im leeren Projekt gibt es nichts zu lesen und nichts zu aendern`() {
         val namen = namen(leeresProjekt())

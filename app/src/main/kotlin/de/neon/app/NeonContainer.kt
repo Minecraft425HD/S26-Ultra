@@ -307,6 +307,11 @@ class NeonContainer(context: Context) {
      */
     private val tools = ToolRegistry(
         listOf(
+            // **Auch hier zuerst die Rückfrage.** Bei den Gerätewerkzeugen wiegt sie sogar
+            // schwerer als beim Programmieren: Ein falsch angelegter Termin steht danach im
+            // Kalender, und eine an die falsche Person geschickte Nachricht ist weg. Beides
+            // lässt sich nicht mit einem Papierkorb auffangen.
+            de.neon.tools.Rueckfrage(),
             CalendarEventTool(appContext),
             ComposeMessageTool(appContext),
         )
