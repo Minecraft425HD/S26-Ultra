@@ -96,6 +96,16 @@ object AndroidProjectTemplate {
      * Was hier steht, muss mit `android.jar` und `kotlin-stdlib` übersetzbar sein, und beide
      * liegen in der APK. Jede weitere Bibliothek wäre ein Download beim Bauen — auf einem
      * Telefon ohne Gradle gibt es den nicht.
+     *
+     * **Und bewusst inhaltsleer.** Hier stand ein Zähler: ein Knopf „Zähl mich" und eine
+     * Anzeige „3 Mal gedrückt". Der Nutzer bat um eine QR-App, bekam ein Gerüst, das eine
+     * fertige Zähler-App war, und musste glauben, Neon habe ihn missverstanden — dabei war
+     * die Vorlage einfach nie ausgetauscht worden.
+     *
+     * Ein Gerüst, das schon nach etwas aussieht, wird für das Ergebnis gehalten. Deshalb
+     * steht jetzt auf dem Bildschirm, dass es eines ist. Der Knopf bleibt: Er ist der
+     * Nachweis, dass Ereignisbehandlung übersetzt und läuft — und dafür braucht er keinen
+     * Zähler.
      */
     private fun activity(vorgabe: Vorgabe) = """
         |package ${vorgabe.paketname}
@@ -110,23 +120,18 @@ object AndroidProjectTemplate {
         |
         |class MainActivity : Activity() {
         |
-        |    private var zaehler = 0
-        |
         |    override fun onCreate(savedInstanceState: Bundle?) {
         |        super.onCreate(savedInstanceState)
         |
         |        val anzeige = TextView(this).apply {
-        |            text = "Hallo von ${vorgabe.appName.kotlinSicher()}"
-        |            textSize = 24f
+        |            text = "${vorgabe.appName.kotlinSicher()}\n\nGerüst — hier fehlt noch die App."
+        |            textSize = 20f
         |            gravity = Gravity.CENTER
         |        }
         |
         |        val knopf = Button(this).apply {
-        |            text = "Zähl mich"
-        |            setOnClickListener {
-        |                zaehler += 1
-        |                anzeige.text = "${'$'}zaehler Mal gedrückt"
-        |            }
+        |            text = "Knopf"
+        |            setOnClickListener { anzeige.text = "Es funktioniert." }
         |        }
         |
         |        setContentView(

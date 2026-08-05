@@ -182,6 +182,28 @@ for name in "${MITGEBRACHT[@]}"; do
                 ;;
         esac
     done < <(patchelf --print-needed "$datei" 2>/dev/null || true)
+
+    # Und die Bibliothek muss sich selbst so nennen, wie sie heißt.
+    #
+    # **Das ist die Zeile, an der wochenlang jeder Bauversuch gescheitert ist.** Aus
+    # `libz.so.1.3.2` wurde oben `libz.so` — Dateiname und DT_NEEDED der Abhängigen wurden
+    # angepasst, der SONAME **in** der Datei blieb `libz.so.1`. Auf dem Telefon sah das so
+    # aus:
+    #
+    #   cannot find "libz.so" from verneed[0] in DT_NEEDED list for ".../libpng16.so"
+    #
+    # Eine Meldung, die in die Irre führt: `libz.so` steht sehr wohl in DT_NEEDED. Androids
+    # Linker vergleicht die Datei aus dem `verneed`-Abschnitt aber nicht mit DT_NEEDED,
+    # sondern mit dem **SONAME der bereits geladenen Abhängigkeit**. libpng16.so verlangte
+    # Symbolversionen aus `libz.so`, geladen war eine Bibliothek, die sich `libz.so.1` nannte
+    # — und damit galt sie als etwas anderes.
+    #
+    # Nur, wo es schon einen SONAME gibt: aapt2 selbst ist ein Programm und hat keinen.
+    soname="$(patchelf --print-soname "$datei" 2>/dev/null || true)"
+    if [[ -n "$soname" && "$soname" != "$name" ]]; then
+        patchelf --set-soname "$name" "$datei" \
+            || warn "  SONAME von $name nicht auf $name gesetzt (war $soname)"
+    fi
 done
 
 # Was niemand braucht, kommt weg.
@@ -266,6 +288,36 @@ for name in "${MITGEBRACHT[@]}"; do
             FEHLER=1
         }
     done < <(patchelf --print-needed "$datei" 2>/dev/null || true)
+
+    # Die Bibliothek muss sich so nennen, wie sie heißt.
+    #
+    # Diese Prüfung ist der eigentliche Grund, warum dieser Abschnitt so lang ist. Der
+    # Fehler, den sie fängt, war auf dem Telefon **nicht** als das erkennbar, was er war:
+    # Der Linker meldete eine Datei als fehlend, die in DT_NEEDED steht. Wer das im
+    # Protokoll liest, sucht an der falschen Stelle. Hier ist es eine Zeile.
+    soname="$(patchelf --print-soname "$datei" 2>/dev/null || true)"
+    if [[ -n "$soname" && "$soname" != "$name" ]]; then
+        warn "  $name nennt sich selbst $soname. Androids Linker vergleicht die verneed-
+     Einträge der Abhängigen mit dem SONAME, nicht mit dem Dateinamen — auf dem Gerät
+     scheitert das Laden mit „cannot find ... from verneed\"."
+        FEHLER=1
+    fi
+
+    # Und jede Symbolversion muss von einer Bibliothek kommen, die auch so heißt.
+    #
+    # Die Gegenprobe zur Zeile darüber, von der anderen Seite aus: Sie fängt auch den Fall,
+    # dass ein verneed-Eintrag auf eine Bibliothek zeigt, die gar nicht mitkommt.
+    while read -r quelle; do
+        [[ -n "$quelle" ]] || continue
+        case "$quelle" in
+            libc.so|libm.so|libdl.so|libz.so|liblog.so|libstdc++.so) continue ;;
+        esac
+        [[ -f "$TARGET_DIR/$quelle" ]] || {
+            warn "  $name verlangt Symbolversionen aus $quelle, das fehlt in $TARGET_DIR"
+            FEHLER=1
+        }
+    done < <(readelf -VW "$datei" 2>/dev/null \
+        | sed -n 's/.*Version: [0-9]*  File: \([^ ]*\)  Cnt.*/\1/p')
 done
 
 (( FEHLER == 0 )) || die "Die Werkzeuge sind so nicht startbar. Siehe die Meldungen oben."

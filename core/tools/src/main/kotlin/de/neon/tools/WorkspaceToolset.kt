@@ -345,11 +345,19 @@ private fun WorkspaceTools.Ergebnis.alsToolResult(): ToolResult =
 internal class AppAnlegen(private val workspace: Workspace) : Tool {
     override val spec = ToolSpec(
         name = "app-anlegen",
-        description = "Legt ein neues Android-Projekt an: Manifest, Ressourcen und eine " +
-            "Start-Activity mit einer Oberfläche aus Code.",
+        description = "Legt ein neues Android-Projekt an: Manifest, Ressourcen und ein " +
+            "Gerüst als Start-Activity. Das Gerüst ist noch nicht die gewünschte App.",
         parameters = listOf(
-            ToolParameter("paketname", ParameterType.STRING, "etwa de.neon.meineapp"),
-            ToolParameter("name", ParameterType.STRING, "Was unter dem Symbol steht"),
+            // Siehe AppAnlegenImProjekt: Ein ausgeschriebenes Beispiel wird von einem
+            // kleinen Modell nicht als Erläuterung gelesen, sondern als Vorschlag.
+            ToolParameter(
+                "paketname", ParameterType.STRING,
+                "de.neon. gefolgt vom Thema der App in Kleinbuchstaben, ohne Umlaute",
+            ),
+            ToolParameter(
+                "name", ParameterType.STRING,
+                "Wie der Nutzer die App genannt hat, wörtlich aus seiner Anfrage",
+            ),
         ),
     )
 
@@ -370,7 +378,9 @@ internal class AppAnlegen(private val workspace: Workspace) : Tool {
         val angelegt = AndroidProjectTemplate.anlegen(workspace, vorgabe)
         return ToolResult.Ok(
             "Projekt $paket angelegt:\n" + angelegt.joinToString("\n") +
-                "\n\nMit „bau die App\" wird daraus eine installierbare APK."
+                "\n\nDas ist erst das Gerüst. Schreib jetzt " +
+                "src/${paket.replace('.', '/')}/MainActivity.kt neu, sodass die App das tut, " +
+                "worum gebeten wurde. Danach bauen."
         )
     }
 }

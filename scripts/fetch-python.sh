@@ -89,12 +89,41 @@ KURZFASSUNG="$(basename "$STDLIB")"   # etwa python3.14
 # Dateien, deren Name auf .so endet, und die unversionierte Fassung liegt daneben.
 log "Bibliotheken nach jniLibs"
 MITGEBRACHT=()
+declare -A UMTAUFEN=()
 for bibliothek in "$PREFIX/lib"/*.so; do
     [[ -f "$bibliothek" ]] || continue
     name="$(basename "$bibliothek")"
     cp -f "$bibliothek" "$JNILIBS/$name"
     chmod 0644 "$JNILIBS/$name"
     MITGEBRACHT+=("$name")
+
+    # Die Bibliothek muss sich so nennen, wie sie hier heißt.
+    #
+    # Termux baut OpenSSL und SQLite unter eigenen Namen: Die Datei heißt `libssl.so`, der
+    # SONAME darin lautet `libssl_python.so`, und `libssl.so` verlangt entsprechend
+    # `libcrypto_python.so`. In Termux gibt es diese Datei; hier nicht — Androids Installer
+    # legt sie als `libcrypto.so` ab. Der Linker suchte also nach einem Namen, den es im
+    # Verzeichnis nicht gibt.
+    #
+    # Aufgefallen ist derselbe Fehler auf der aapt2-Seite, wo er jeden Bauversuch zerlegt
+    # hat. Hier ist er stiller: Es scheitert allein `import ssl`, und zwar erst dann.
+    soname="$(patchelf --print-soname "$JNILIBS/$name" 2>/dev/null || true)"
+    if [[ -n "$soname" && "$soname" != "$name" ]]; then
+        patchelf --set-soname "$name" "$JNILIBS/$name" \
+            || warn "  SONAME von $name bleibt $soname"
+        UMTAUFEN["$soname"]="$name"
+    fi
+done
+
+# Und jeden Verweis auf den alten Namen mitziehen.
+#
+# Zwei Durchgänge, weil `libssl.so` auf `libcrypto_python.so` zeigt und beide erst nach dem
+# ersten Durchgang bekannt sind. Ein einzelner Durchgang hätte die Reihenfolge im
+# Verzeichnis zur Bedingung gemacht — und die ist nirgends zugesichert.
+for name in "${MITGEBRACHT[@]}"; do
+    for alt in "${!UMTAUFEN[@]}"; do
+        patchelf --replace-needed "$alt" "${UMTAUFEN[$alt]}" "$JNILIBS/$name" 2>/dev/null || true
+    done
 done
 (( ${#MITGEBRACHT[@]} > 0 )) || die "keine Bibliothek gefunden."
 
@@ -141,6 +170,26 @@ pruefe_ausrichtung() {
 
 for name in "${MITGEBRACHT[@]}"; do
     pruefe_ausrichtung "$JNILIBS/$name" "$name"
+
+    # Jede Bibliothek muss sich so nennen, wie sie heißt, und darf nur nach Namen greifen,
+    # die es hier gibt. Androids Linker sucht nach dem Namen aus DT_NEEDED und vergleicht
+    # verneed-Einträge mit dem SONAME der geladenen Datei — beides sind Namen **in** der
+    # Datei, keine Dateinamen. Weichen sie ab, scheitert der Import, und zwar erst auf dem
+    # Telefon.
+    soname="$(patchelf --print-soname "$JNILIBS/$name" 2>/dev/null || true)"
+    if [[ -n "$soname" && "$soname" != "$name" ]]; then
+        warn "  $name nennt sich selbst $soname"
+        FEHLER=1
+    fi
+    while read -r bedarf; do
+        case "$bedarf" in
+            lib[cmd]*.so|liblog.so|libz.so|libstdc++.so|libandroid.so|libdl.so) continue ;;
+        esac
+        [[ -f "$JNILIBS/$bedarf" ]] || {
+            warn "  $name braucht $bedarf, das fehlt in $JNILIBS"
+            FEHLER=1
+        }
+    done < <(patchelf --print-needed "$JNILIBS/$name" 2>/dev/null || true)
 done
 
 ANZAHL_MODULE=0

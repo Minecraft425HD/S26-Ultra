@@ -156,6 +156,49 @@ class ProjektWerkzeugeTest {
         assertFalse(b.aktiv()!!.istAndroidProjekt, "kein halbes Android-Gerüst für ein Skript")
     }
 
+    /**
+     * **Kein Beispielwert im Prompt, den ein Modell abschreiben kann.**
+     *
+     * Der Fall auf dem Gerät: Der Nutzer bat um eine QR-App und bekam ein Projekt namens
+     * `zaehler-app` mit dem Paket `de.neon.zaehler`. In der Parameterbeschreibung stand
+     * „etwa de.neon.zaehler" und „etwa Zähler" — das 7-B-Modell hat den Beispielwert
+     * übernommen, statt zuzuhören.
+     *
+     * Für ein kleines Modell ist ein ausgeschriebenes Beispiel keine Erläuterung, sondern
+     * ein Vorschlag. Beschrieben gehört die Form und woher der Inhalt kommt.
+     */
+    @Test
+    fun `die Beschreibung von app-anlegen nennt keinen fertigen Wert`() {
+        val spec = AppAnlegenImProjekt(bereich()).spec
+        val text = spec.description + " " + spec.parameters.joinToString(" ") { it.description }
+
+        assertFalse("zaehler" in text.lowercase(), text)
+        assertFalse("meineapp" in text.lowercase(), text)
+        // Und der Paketname darf nicht schon dreiteilig dastehen: Genau das schreibt ein
+        // Modell dann ab.
+        assertFalse(Regex("""de\.\w+\.\w+""").containsMatchIn(text), text)
+    }
+
+    /**
+     * **Das Gerüst darf sich nicht für die App halten.**
+     *
+     * Die Vorlage schreibt eine übersetzbare Activity, aber nicht die gewünschte. Sagt das
+     * Ergebnis nur „damit wird daraus eine APK", baut das Modell das Gerüst und meldet die
+     * App als fertig — der Nutzer bekommt etwas Lauffähiges, das alles kann außer dem,
+     * worum er gebeten hat.
+     */
+    @Test
+    fun `nach app-anlegen sagt die Antwort, welche Datei jetzt zu schreiben ist`() = runTest {
+        val b = bereich()
+
+        val ergebnis = AppAnlegenImProjekt(b)
+            .execute(mapOf("paketname" to "de.neon.qr", "name" to "QR"))
+
+        val text = (ergebnis as ToolResult.Ok).spoken
+        assertTrue("src/de/neon/qr/MainActivity.kt" in text, text)
+        assertTrue("Gerüst" in text, text)
+    }
+
     @Test
     fun `aus einem Namen ohne Buchstaben wird kein Projekt`() = runTest {
         val b = bereich()

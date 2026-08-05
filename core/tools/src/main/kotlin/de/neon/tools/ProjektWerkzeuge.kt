@@ -178,10 +178,25 @@ internal class AppAnlegenImProjekt(private val bereich: Projektbereich) : Tool {
     override val spec = ToolSpec(
         name = "app-anlegen",
         description = "Legt ein neues Android-Projekt in einem eigenen Ordner an: Manifest, " +
-            "Ressourcen und eine Start-Activity. Wechselt anschließend hinein.",
+            "Ressourcen und ein Gerüst als Start-Activity. Wechselt anschließend hinein. " +
+            "Das Gerüst ist noch nicht die gewünschte App — der Code kommt danach.",
         parameters = listOf(
-            ToolParameter("paketname", ParameterType.STRING, "etwa de.neon.zaehler"),
-            ToolParameter("name", ParameterType.STRING, "Was unter dem Symbol steht, etwa Zähler"),
+            // **Ohne ausgeschriebenes Beispiel, und das ist eine Korrektur.** Hier stand
+            // „etwa de.neon.zaehler" und „etwa Zähler". Der Nutzer bat um eine QR-App und
+            // bekam ein Projekt namens `zaehler-app` mit dem Paket `de.neon.zaehler`: Das
+            // 7-B-Modell hat den Beispielwert abgeschrieben statt zuzuhören.
+            //
+            // Ein Beispiel im Prompt ist für ein kleines Modell keine Erläuterung, sondern
+            // ein Vorschlag. Beschrieben wird deshalb die **Form** und woher der Inhalt
+            // kommt — nicht, wie ein fertiger Wert aussieht.
+            ToolParameter(
+                "paketname", ParameterType.STRING,
+                "de.neon. gefolgt vom Thema der App in Kleinbuchstaben, ohne Umlaute",
+            ),
+            ToolParameter(
+                "name", ParameterType.STRING,
+                "Wie der Nutzer die App genannt hat, wörtlich aus seiner Anfrage",
+            ),
         ),
     )
 
@@ -211,8 +226,14 @@ internal class AppAnlegenImProjekt(private val bereich: Projektbereich) : Tool {
 
         val angelegt = AndroidProjectTemplate.anlegen(bereich.arbeitsbereich(projekt), vorgabe)
         return ToolResult.Ok(
+            // **Der nächste Schritt muss dastehen.** Vorher endete dieser Satz mit „damit
+            // wird daraus eine APK" — und genau das tat das Modell: Es baute das Gerüst und
+            // meldete die App als fertig. Der Nutzer bekam eine übersetzbare App, die alles
+            // konnte außer dem, worum er gebeten hatte.
             "Projekt ${projekt.name} angelegt ($paket):\n" + angelegt.joinToString("\n") +
-                "\n\nMit „bau die App\" wird daraus eine installierbare APK."
+                "\n\nDas ist erst das Gerüst. Schreib jetzt " +
+                "src/${paket.replace('.', '/')}/MainActivity.kt neu, sodass die App das tut, " +
+                "worum gebeten wurde. Danach bauen."
         )
     }
 }
