@@ -555,10 +555,23 @@ class NeonContainer(context: Context) {
             return
         }
 
+        val dalvik = DalvikRunner(cacheDir = File(appContext.cacheDir, "dalvik"))
+
+        // **Beim Start sagen, ob es eine Laufzeit gibt.** Vorher stand hier nur „Bau-Kette
+        // bereit" — und bereit war sie nicht: `dalvikvm` wurde in `/system/bin` gesucht, wo
+        // es seit Android 10 nicht mehr liegt. Auffallen konnte das erst nach einer Minute
+        // Bauzeit im dritten Schritt, und die Meldung dort nannte keinen einzigen Pfad.
+        val laufzeit = dalvik.gefundeneLaufzeit()
+        if (laufzeit != null) {
+            NeonLog.i(TAG_IDE, "Java-Laufzeit: $laufzeit")
+        } else {
+            NeonLog.w(TAG_IDE, "Keine Java-Laufzeit gefunden:\n${dalvik.befund()}")
+        }
+
         build = AndroidBuild(
             tools = werkzeuge,
             runner = ProcessCommandRunner(),
-            java = DalvikRunner(cacheDir = File(appContext.cacheDir, "dalvik")),
+            java = dalvik,
             log = { meldung -> NeonLog.i(TAG_IDE, meldung) },
         )
         NeonLog.i(TAG, "Bau-Kette bereit")
