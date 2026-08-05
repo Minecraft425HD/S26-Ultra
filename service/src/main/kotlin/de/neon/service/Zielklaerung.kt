@@ -92,14 +92,37 @@ object Zielklaerung {
      */
     fun brauchtSprachfrage(text: String, projektIstAndroid: Boolean): Boolean {
         if (projektIstAndroid) return false
+        if (!istBauauftrag(text)) return false
 
-        val klein = text.lowercase().trimStart()
-        if (FRAGEWORT.any { klein.startsWith(it) }) return false
-        if (AUFTRAG.none { it in klein }) return false
+        val klein = text.lowercase()
         if (ANDROID.any { it in klein }) return false
         if (PYTHON.any { it in klein }) return false
 
         return true
+    }
+
+    /**
+     * Ob jemand etwas gebaut haben will — unabhängig davon, in welcher Sprache.
+     *
+     * **Warum das die Einordnung überstimmen muss.** Auf „programmiere eine
+     * QR-Generierungs-App für Android" hat Neon einen Aufsatz geschrieben: eine Erklärung,
+     * eine Java-Klasse in einem Codeblock, ein Layout in XML, und am Ende den Hinweis, man
+     * bräuchte noch eine Bibliothek. Nichts davon liegt auf dem Telefon, nichts davon ist
+     * übersetzbar, und ein Projekt gibt es nicht.
+     *
+     * Dass die Werkzeugkette dabei nie angelaufen ist, steht in der Antwort selbst: In der
+     * Kette erzwingt Neon eine Grammatik, die **ausschließlich** Werkzeugaufrufe zulässt.
+     * Prosa ist dort nicht erzeugbar. Also hat die Einordnung den Satz nicht als
+     * Programmieraufgabe erkannt — und ein Modell, das nie gefragt wird, kann auch nicht
+     * richtig antworten.
+     *
+     * Ein Bauauftrag ist keine Schätzung, sondern am Satz zu erkennen. Er gehört damit zu
+     * denselben harten Tatsachen wie „es liegt ein Bild an".
+     */
+    fun istBauauftrag(text: String): Boolean {
+        val klein = text.lowercase().trimStart()
+        if (FRAGEWORT.any { klein.startsWith(it) }) return false
+        return AUFTRAG.any { it in klein }
     }
 
     /**

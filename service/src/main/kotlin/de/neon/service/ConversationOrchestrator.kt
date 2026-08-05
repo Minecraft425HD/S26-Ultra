@@ -468,12 +468,26 @@ class ConversationOrchestrator(
             text = auftrag,
             hasImage = hasImage,
             explicitDeepThinking = wantsDeeperAnswer(auftrag),
-            // **Nach einer beantworteten Rückfrage steht die Kategorie fest.** Neon hat mit
-            // der Frage bereits festgestellt, dass ein Bauauftrag vorliegt; die Antwort
-            // ändert daran nichts. Ohne das wurde „Android" für sich genommen eingeordnet —
-            // als gewöhnliche Frage —, und die Werkzeugkette lief gar nicht erst an. Genau
-            // das steht im Geräteprotokoll: eine Prosa-Antwort von 220 Token, kein Projekt.
-            bekannteKategorie = if (offen != null) TaskCategory.CODE else null,
+            // **Ein Bauauftrag ist eine Programmieraufgabe — ohne Abstimmung.**
+            //
+            // Auf „programmiere eine QR-Generierungs-App für Android" hat Neon einen Aufsatz
+            // geschrieben: eine Erklärung, eine Java-Klasse in einem Codeblock, ein Layout in
+            // XML, am Ende der Hinweis, man bräuchte noch eine Bibliothek. Kein Projekt,
+            // nichts Übersetzbares.
+            //
+            // Dass die Werkzeugkette dabei nie angelaufen ist, beweist die Antwort selbst: In
+            // der Kette erzwingt Neon eine Grammatik, die ausschließlich Werkzeugaufrufe
+            // zulässt — Prosa ist dort nicht erzeugbar. Die Einordnung hat den Satz also nicht
+            // als CODE erkannt, und ein Modell, das nie gefragt wird, kann auch nicht richtig
+            // antworten.
+            //
+            // Gilt auch nach einer beantworteten Rückfrage: „Android" für sich genommen ist
+            // keine Programmieraufgabe, der Auftrag dahinter schon.
+            bekannteKategorie = if (offen != null || Zielklaerung.istBauauftrag(auftrag)) {
+                TaskCategory.CODE
+            } else {
+                null
+            },
         )
         val decision = router.route(utterance, deviceState())
 

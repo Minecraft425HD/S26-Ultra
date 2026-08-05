@@ -570,4 +570,45 @@ class WerkzeugketteTest {
 
         assertEquals(1, anlegen.aufrufe, "die Kette lief nicht an")
     }
+
+    /**
+     * **Ein Bauauftrag landet in der Werkzeugkette, egal was die Einordnung sagt.**
+     *
+     * Auf "programmiere eine QR-Generierungs-App fuer Android" kam ein Aufsatz: eine
+     * Erklaerung, eine Java-Klasse im Codeblock, ein Layout in XML, am Ende der Hinweis, man
+     * braeuchte noch eine Bibliothek. Kein Projekt, nichts Uebersetzbares.
+     *
+     * Dass die Kette nie angelaufen ist, beweist die Antwort selbst: In der Kette erzwingt
+     * Neon eine Grammatik, die ausschliesslich Werkzeugaufrufe zulaesst -- Prosa ist dort
+     * nicht erzeugbar. Der Router hat den Satz also nicht als CODE erkannt.
+     */
+    @Test
+    fun `ein Bauauftrag laeuft in die Kette, auch wenn der Router etwas anderes meint`() =
+        runTest {
+            val anlegen = NotierendesWerkzeug("app-anlegen", "Projekt angelegt.")
+            val engine = SkriptEngine(listOf(ruf("app-anlegen", "de.neon.qr")))
+
+            // Der Router ordnet hier als WISSENSFRAGE ein -- genau der Fehlgriff vom Geraet.
+            aufbau(
+                "egal", TaskCategory.WISSENSFRAGE, engine, FakeTts(),
+                listOf(anlegen), mutableListOf(),
+            ).handleText("programmiere eine qr generierungsapp fuer android")
+
+            assertEquals(1, anlegen.aufrufe, "der Bauauftrag wurde als Prosa beantwortet")
+        }
+
+    /** Und eine Wissensfrage bleibt eine: Sie darf nicht in die Kette geraten. */
+    @Test
+    fun `eine Wissensfrage geraet nicht in die Werkzeugkette`() = runTest {
+        val anlegen = NotierendesWerkzeug("app-anlegen", "Projekt angelegt.")
+        val engine = SkriptEngine(listOf("Lima."))
+
+        val bericht = aufbau(
+            "egal", TaskCategory.WISSENSFRAGE, engine, FakeTts(),
+            listOf(anlegen), mutableListOf(),
+        ).handleText("was ist die hauptstadt von peru")!!
+
+        assertEquals(0, anlegen.aufrufe)
+        assertEquals("Lima.", bericht.answer)
+    }
 }

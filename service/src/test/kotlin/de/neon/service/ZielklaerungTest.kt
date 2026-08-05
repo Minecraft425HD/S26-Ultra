@@ -196,4 +196,46 @@ class ZielklaerungTest {
         assertContains(Zielklaerung.FRAGE_NOCHMAL, "Python")
         assertContains(Zielklaerung.FRAGE_NOCHMAL, "einem Wort")
     }
+
+    // ---- Der Bauauftrag als harte Tatsache ----------------------------------------------
+
+    /**
+     * **Ein Bauauftrag ist eine Programmieraufgabe — ohne Abstimmung.**
+     *
+     * Auf „programmiere eine QR-Generierungs-App für Android" hat Neon einen Aufsatz
+     * geschrieben: eine Erklärung, eine Java-Klasse im Codeblock, ein Layout in XML, am Ende
+     * der Hinweis, man bräuchte noch eine Bibliothek. Kein Projekt, nichts Übersetzbares.
+     *
+     * Dass die Werkzeugkette dabei nie angelaufen ist, beweist die Antwort selbst: In der
+     * Kette erzwingt Neon eine Grammatik, die ausschließlich Werkzeugaufrufe zulässt — Prosa
+     * ist dort nicht erzeugbar.
+     */
+    @Test
+    fun `ein Bauauftrag wird auch mit Sprachangabe erkannt`() {
+        assertTrue(Zielklaerung.istBauauftrag("programmiere eine qr generierungsapp für android"))
+        assertTrue(Zielklaerung.istBauauftrag("schreib mir ein Python-Skript für QR-Codes"))
+        assertTrue(Zielklaerung.istBauauftrag("bau mir eine apk"))
+        assertTrue(Zielklaerung.istBauauftrag("mach mir eine Zähler-App"))
+    }
+
+    @Test
+    fun `eine Frage ist auch hier kein Bauauftrag`() {
+        assertFalse(Zielklaerung.istBauauftrag("wie schreibe ich eine schleife"))
+        assertFalse(Zielklaerung.istBauauftrag("was ist ein QR-Code"))
+        assertFalse(Zielklaerung.istBauauftrag("wie spät ist es"))
+        assertFalse(Zielklaerung.istBauauftrag("was ist die hauptstadt von peru"))
+    }
+
+    /** Und die Sprachfrage ist die engere Bedingung: jede von ihnen ist ein Bauauftrag. */
+    @Test
+    fun `wer nach der Sprache gefragt wird, hat einen Bauauftrag gestellt`() {
+        listOf(
+            "programmiere eine qr generierungsapp",
+            "mach mir eine Zähler-App",
+            "kannst du mir eine QR-App bauen?",
+        ).forEach {
+            assertTrue(Zielklaerung.istBauauftrag(it), it)
+            assertTrue(fragt(it), it)
+        }
+    }
 }
