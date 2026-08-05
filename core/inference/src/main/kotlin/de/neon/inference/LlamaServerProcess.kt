@@ -152,9 +152,23 @@ class ProcessServerSupervisor(
      * [laufenderKontext] sagt, was tatsächlich benutzt wird.
      */
     @Volatile
-    var contextSize: Int = contextSize.coerceIn(MIN_CONTEXT_SIZE, MAX_CONTEXT_SIZE)
+    /**
+     * Die gewünschte Kontextgröße — **immer eine der Stufen.**
+     *
+     * **Warum hier gerastet wird und nicht nur im Regler.** Der Regler rastet seit einer
+     * Weile, ein früher gespeicherter Wert nicht: Auf dem Gerät stand 18432 in den
+     * Einstellungen, und weil nichts ihn je berichtigte, protokollierte jeder einzelne
+     * Serverstart „Kontext auf 16384 statt 18432 — 18432 ist keine der möglichen Stufen".
+     * Sachlich richtig, und trotzdem eine Zeile, die dauerhaft nach einem Fehler aussieht,
+     * wo keiner ist.
+     *
+     * Der Wert wird deshalb dort gerastet, wo er ankommt, statt an jeder Stelle, die ihn
+     * setzt. Wer den Regler bewegt, ändert danach nichts mehr; wer einen alten Wert aus den
+     * Einstellungen einliest, bekommt ihn stillschweigend berichtigt.
+     */
+    var contextSize: Int = naechsteStufe(contextSize.coerceIn(MIN_CONTEXT_SIZE, MAX_CONTEXT_SIZE))
         set(value) {
-            val neu = value.coerceIn(MIN_CONTEXT_SIZE, MAX_CONTEXT_SIZE)
+            val neu = naechsteStufe(value.coerceIn(MIN_CONTEXT_SIZE, MAX_CONTEXT_SIZE))
             if (neu == field) return
             field = neu
             // Nicht sofort neu starten: Der nächste Aufruf tut das ohnehin, und ein

@@ -154,4 +154,24 @@ class ContextSizeTest {
             ProcessServerSupervisor.KONTEXT_STUFEN.max(),
         )
     }
+
+    /**
+     * **Ein gespeicherter Zwischenwert wird stillschweigend berichtigt.**
+     *
+     * Der Regler rastet seit einer Weile; ein früher gespeicherter Wert nicht. Auf dem Gerät
+     * stand 18432 in den Einstellungen, und weil nichts ihn je berichtigte, protokollierte
+     * jeder einzelne Serverstart „Kontext auf 16384 statt 18432 — 18432 ist keine der
+     * möglichen Stufen". Sachlich richtig, und trotzdem eine Zeile, die dauerhaft nach einem
+     * Fehler aussieht, wo keiner ist.
+     */
+    @Test
+    fun `ein Wert zwischen den Stufen wird auf die naechstkleinere gerastet`() {
+        assertEquals(16_384, ProcessServerSupervisor.naechsteStufe(18_432))
+        assertEquals(16_384, ProcessServerSupervisor.naechsteStufe(25_600))
+        assertEquals(8_192, ProcessServerSupervisor.naechsteStufe(11_264))
+        // Und die Stufen selbst bleiben, wie sie sind.
+        ProcessServerSupervisor.KONTEXT_STUFEN.forEach {
+            assertEquals(it, ProcessServerSupervisor.naechsteStufe(it))
+        }
+    }
 }
